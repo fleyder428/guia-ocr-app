@@ -25,16 +25,18 @@ def ocr_space_api(imagen_bytes):
     texto = resultado['ParsedResults'][0]['ParsedText']
     return texto
 
-# 🔎 Extrae datos clave del texto OCR
+# 🔎 Extrae datos clave del texto OCR con casillas en blanco y orden requerido
 def extraer_datos_clave(texto):
     def buscar_patron(patrones):
         for patron in patrones:
             match = re.search(patron, texto, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                valor = match.group(1).strip()
+                valor = re.sub(r"[\n\r\t]+", "", valor)
+                return valor
         return ""
 
-    return {
+    datos = {
         "Fecha y hora de salida": buscar_patron([r"(?:salida.*?)[:\-]\s*(\S.+)", r"FECHA.*?SALIDA.*?[:\-]?\s*(\S.+)"]),
         "Placa del cabeza tractora": buscar_patron([r"placa.*?cabeza.*?[:\-]?\s*([A-Z0-9\-]+)"]),
         "Placa del tanque": buscar_patron([r"placa.*?tanque.*?[:\-]?\s*([A-Z0-9\-]+)"]),
@@ -42,6 +44,8 @@ def extraer_datos_clave(texto):
         "Empresa transportadora": buscar_patron([r"empresa transportadora\s*[:\-]?\s*(.*)"]),
         "Cédula": buscar_patron([r"c[eé]dula.*?[:\-]?\s*([0-9\.]+)"]),
         "Conductor": buscar_patron([r"(?:nombre del conductor|conductor)\s*[:\-]?\s*([A-ZÑÁÉÍÓÚ ]{5,})"]),
+        # Casilla en blanco tras Conductor
+        "Casilla en blanco 1": "",
         "Lugar de origen": buscar_patron([r"lugar de origen\s*[:\-]?\s*(.*)"]),
         "Lugar de destino": buscar_patron([r"lugar de destino\s*[:\-]?\s*(.*)"]),
         "Barriles brutos": buscar_patron([r"brutos\s*[:\-]?\s*([\d.,]+)"]),
@@ -50,8 +54,23 @@ def extraer_datos_clave(texto):
         "API": buscar_patron([r"\bAPI\b\s*[:\-]?\s*([\d.,]+)"]),
         "BSW (%)": buscar_patron([r"\bBSW\b.*?%?\s*[:\-]?\s*([\d.,]+)"]),
         "Vigencia de guía": buscar_patron([r"(?:horas de vigencia|vigencia)\s*[:\-]?\s*([\d]+)\s*horas?"]),
+        # Seis casillas en blanco después de Vigencia de guía
+        "Casilla en blanco 2": "",
+        "Casilla en blanco 3": "",
+        "Casilla en blanco 4": "",
+        "Casilla en blanco 5": "",
+        "Casilla en blanco 6": "",
+        "Casilla en blanco 7": "",
         "Sellos": buscar_patron([r"(?:sello|sellos)\s*[:\-]?\s*(.*)"]),
     }
+
+    # Por si alguno quedó None
+    for clave in datos:
+        if datos[clave] is None:
+            datos[clave] = ""
+
+    return datos
+
 
 # 🎯 Streamlit UI
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
@@ -84,7 +103,6 @@ if archivo_subido:
                 texto_ocr = ocr_space_api(imagen_bytes)
                 datos = extraer_datos_clave(texto_ocr)
 
-                # Orden y columnas exactas que quieres
                 columnas_ordenadas = [
                     "Fecha y hora de salida",
                     "Placa del cabeza tractora",
@@ -93,6 +111,7 @@ if archivo_subido:
                     "Empresa transportadora",
                     "Cédula",
                     "Conductor",
+                    "Casilla en blanco 1",
                     "Lugar de origen",
                     "Lugar de destino",
                     "Barriles brutos",
@@ -101,12 +120,17 @@ if archivo_subido:
                     "API",
                     "BSW (%)",
                     "Vigencia de guía",
+                    "Casilla en blanco 2",
+                    "Casilla en blanco 3",
+                    "Casilla en blanco 4",
+                    "Casilla en blanco 5",
+                    "Casilla en blanco 6",
+                    "Casilla en blanco 7",
                     "Sellos"
                 ]
 
                 df = pd.DataFrame([datos])
-                # Seleccionar sólo las columnas indicadas y en ese orden
-                df = df.reindex(columns=columnas_ordenadas)
+                df = df.reindex(columns=columnas_ordenadas, fill_value="")
 
                 st.success("✅ Datos extraídos correctamente")
                 st.dataframe(df)
