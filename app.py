@@ -1,123 +1,47 @@
 import streamlit as st
 import requests
-import pandas as pd
-from io import BytesIO
-from PIL import Image
 
-# ===== CONFIGURACIÓN GENERAL =====
-st.set_page_config(page_title="🧾 Guías OCR Personalizadas")
-st.title("🧾 Cargar Guía y Extraer Datos")
-
-# ===== DATOS DE USUARIO =====
-api_key = st.secrets["ocr_space_api_key"]  # Usa secrets.toml o reemplaza directamente aquí
-url_api = 'https://api.ocr.space/parse/image'
-
-# ===== SUBIR IMAGEN =====
-imagen = st.file_uploader("📤 Sube una imagen JPG o PNG de la guía", type=["jpg", "jpeg", "png"])
-
-# ===== FUNCIONES =====
-def enviar_ocr_space(imagen_bytes):
-    response = requests.post(
-        url_api,
-        files={"filename": imagen_bytes},
-        data={
-            "apikey": api_key,
-            "language": "spa",
-            "isTable": "false",
-            "OCREngine": "2"
-        }
-    )
-    result = response.json()
-    return result['ParsedResults'][0]['ParsedText'] if 'ParsedResults' in result else ""
-
-def extraer_campos(texto):
-    campos = {
-        "Fecha y hora de salida": "",
-        "Placa cabeza tractora": "",
-        "Placa del tanque": "",
-        "Número de guía": "",
-        "Empresa transportadora": "",
-        "Cédula": "",
-        "Conductor": "",
-        "Casilla en blanco 1": "",
-        "Lugar de origen": "",
-        "Lugar de destino": "",
-        "Barriles brutos": "",
-        "Barriles netos": "",
-        "Barriles a 60°F": "",
-        "API": "",
-        "BSW (%)": "",
-        "Vigencia de guía": "",
-        "Casilla en blanco 2": "",
-        "Casilla en blanco 3": "",
-        "Casilla en blanco 4": "",
-        "Casilla en blanco 5": "",
-        "Casilla en blanco 6": "",
-        "Casilla en blanco 7": "",
-        "Sellos": ""
+def ocr_space_api(image_bytes, api_key):
+    """Enviar imagen a OCR.space y devolver texto reconocido."""
+    url_api = "https://api.ocr.space/parse/image"
+    headers = {
+        "apikey": api_key,
     }
-
-    texto = texto.replace("\n", " ").replace(":", " ").replace(",", ".")
-    palabras = texto.split()
-
-    # Ejemplos de extracción robusta (puedes mejorarlo por regex luego)
-    for i, palabra in enumerate(palabras):
-        if palabra.startswith("GWU"):
-            campos["Placa cabeza tractora"] = palabra
-        elif palabra.startswith("R7"):
-            campos["Placa del tanque"] = palabra
-        elif palabra.lower().startswith("vigia"):
-            campos["Empresa transportadora"] = palabra
-        elif "CAMILO" in palabra.upper():
-            campos["Conductor"] = " ".join(palabras[i:i+3])
-        elif palabra.lower() == "pendare":
-            campos["Lugar de origen"] = "CPF PENDARE"
-        elif "guaduas" in palabra.lower():
-            campos["Lugar de destino"] = "ESTACIÓN GUADUAS"
-        elif palabra.lower() == "brutos":
-            campos["Barriles brutos"] = palabras[i+1]
-        elif palabra == "netos":
-            campos["Barriles netos"] = palabras[i+1]
-        elif palabra == "60°F" or palabra == "60f":
-            campos["Barriles a 60°F"] = palabras[i-1]
-        elif palabra.lower() == "api":
-            campos["API"] = palabras[i+1]
-        elif palabra.lower() == "bsw":
-            campos["BSW (%)"] = palabras[i+1]
-        elif palabra == "HORAS":
-            campos["Vigencia de guía"] = palabras[i-1] + " HORAS"
-        elif palabra.isdigit() and len(palabra) == 7:
-            campos["Número de guía"] = palabra
-        elif len(palabra) == 8 and palabra.isdigit():
-            campos["Cédula"] = palabra
-        elif palabra.lower().startswith("2089"):
-            campos["Sellos"] = palabra
-
-    return campos
-
-# ===== PROCESAR =====
-if imagen:
-    st.image(imagen, caption="Guía cargada", use_column_width=True)
-
-    # Convertir imagen a bytes
-    imagen_bytes = imagen.read()
-
-    with st.spinner("🧠 Aplicando OCR..."):
-        texto_ocr = enviar_ocr_space(imagen_bytes)
-
-    if texto_ocr:
-        campos = extraer_campos(texto_ocr)
-        df = pd.DataFrame([campos])
-        st.success("✅ Extracción completa")
-        st.dataframe(df)
-
-        output = BytesIO()
-        df.to_excel(output, index=False, engine="openpyxl")
-        st.download_button(
-            label="📥 Descargar Excel",
-            data=output.getvalue(),
-            file_name="guia_extraida.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    files = {
+        'file': ('image.png', image_bytes),
+    }
+    payload = {
+        'language': 'spa',  # español
+        'isOverlayRequired': False,
+    }
+    response = requests.post(url_api, headers=headers, files=files, data=payload)
+    result = response.json()
+    if result.get("IsErroredOnProcessing"):
+        st.error("Error en OCR.space: " + result.get("ErrorMessage", ["Error desconocido"])[0])
+        return None
+    parsed_results = result.get("ParsedResults")
+    if parsed_results:
+        return parsed_results[0].get("ParsedText", "")
     else:
-        st.error("❌ No se pudo procesar el OCR. Verifica la imagen o tu API key.")
+        return ""
+
+st.title("OCR.space con Streamlit")
+
+# Obtener API key
+try:
+    api_key = st.secrets["ocr_space_api_key"]
+except KeyError:
+    st.warning("No se encontró la clave 'ocr_space_api_key' en secrets.toml. Usando clave fija para pruebas.")
+    api_key = "TU_API_KEY_REAL_AQUI"  # Cambia esto con tu clave para pruebas locales
+
+uploaded_file = st.file_uploader("Sube una imagen para extraer texto (PNG, JPG, etc.)", type=["png", "jpg", "jpeg"])
+
+if uploaded_file and api_key:
+    bytes_data = uploaded_file.read()
+    with st.spinner("Procesando OCR..."):
+        text = ocr_space_api(bytes_data, api_key)
+    if text:
+        st.subheader("Texto reconocido:")
+        st.text_area("", text, height=300)
+    else:
+        st.error("No se pudo extraer texto de la imagen.")
