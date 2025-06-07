@@ -8,7 +8,7 @@ import re
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
 st.title("🛢️ Extractor Inteligente de Guías de Transporte de Crudo")
 
-api_key = "K84668714088957"  # Puedes cambiarlo o usar st.secrets["ocr_space_api_key"]
+api_key = "K84668714088957"  # Cambia aquí tu API key si quieres
 
 def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
     img = Image.open(image_file)
@@ -21,9 +21,13 @@ def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
 
 def extract_text_from_image(image):
     url_api = "https://api.ocr.space/parse/image"
+    files = {
+        # El nombre 'image.jpg' y el mime type 'image/jpeg' son claves para que OCR.space detecte el tipo
+        "filename": ("image.jpg", image, "image/jpeg")
+    }
     result = requests.post(
         url_api,
-        files={"filename": image},
+        files=files,
         data={
             "apikey": api_key,
             "language": "spa",
@@ -41,26 +45,25 @@ def extract_custom_fields(text):
         match = re.search(pattern, text, re.IGNORECASE)
         return match.group(1).strip() if match else default
 
-    # Extracting each field with best-effort pattern matching
     return [
-        find(r"fecha.+salida[:\s]*([\d/:\sAMP]+)", text),                            # 1. Fecha y hora de salida
-        find(r"placa(?:s)?(?: del)?(?: cabezote| cabeza)?[:\s]*([A-Z0-9\-]+)", text),# 2. Placa cabeza tractora
-        find(r"placa(?:s)?(?: del)? tanque[:\s]*([A-Z0-9\-]+)", text),              # 3. Placa tanque
-        find(r"gu[ií]a[:\s#]*([0-9]{3,})", text),                                   # 4. Número de guía
-        find(r"empresa transportadora[:\s]*([\w\s]+)", text),                       # 5. Empresa transportadora
-        find(r"c[eé]dula[:\s]*([0-9]{6,})", text),                                  # 6. Cédula
-        find(r"conductor[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),                             # 7. Conductor
-        "",                                                                         # 8. Casilla en blanco
-        find(r"origen[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),                                # 9. Lugar de origen
-        find(r"destino[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),                               # 10. Lugar de destino
-        find(r"barriles brutos[:\s]*([0-9.]+)", text),                              # 11. Brutos
-        find(r"barriles netos[:\s]*([0-9.]+)", text),                               # 12. Netos
-        find(r"barriles.*60°[Ff][:\s]*([0-9.]+)", text),                            # 13. A 60°F
-        find(r"\bapi[:\s]*([0-9.]+)", text),                                        # 14. API
-        find(r"bsw[:\s%]*([0-9.]+)", text),                                         # 15. BSW
-        find(r"vigencia[:\s]*([0-9]+)", text),                                      # 16. Vigencia guía
-        "", "", "", "", "", "",                                                     # 17–22. Seis casillas en blanco
-        find(r"sellos?[:\s]*([\d\- ]{5,})", text)                                   # 23. Sellos
+        find(r"fecha.+salida[:\s]*([\d/:\sAMP]+)", text),
+        find(r"placa(?:s)?(?: del)?(?: cabezote| cabeza)?[:\s]*([A-Z0-9\-]+)", text),
+        find(r"placa(?:s)?(?: del)? tanque[:\s]*([A-Z0-9\-]+)", text),
+        find(r"gu[ií]a[:\s#]*([0-9]{3,})", text),
+        find(r"empresa transportadora[:\s]*([\w\s]+)", text),
+        find(r"c[eé]dula[:\s]*([0-9]{6,})", text),
+        find(r"conductor[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
+        "",
+        find(r"origen[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
+        find(r"destino[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
+        find(r"barriles brutos[:\s]*([0-9.]+)", text),
+        find(r"barriles netos[:\s]*([0-9.]+)", text),
+        find(r"barriles.*60°[Ff][:\s]*([0-9.]+)", text),
+        find(r"\bapi[:\s]*([0-9.]+)", text),
+        find(r"bsw[:\s%]*([0-9.]+)", text),
+        find(r"vigencia[:\s]*([0-9]+)", text),
+        "", "", "", "", "", "",
+        find(r"sellos?[:\s]*([\d\- ]{5,})", text)
     ]
 
 uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
@@ -88,7 +91,6 @@ if uploaded_file:
         st.success("✅ Datos extraídos exitosamente")
         st.dataframe(df, use_container_width=True)
 
-        # Exportar a Excel
         excel_buffer = io.BytesIO()
         df.to_excel(excel_buffer, index=False)
         excel_buffer.seek(0)
