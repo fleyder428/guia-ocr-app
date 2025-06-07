@@ -1,129 +1,140 @@
 import streamlit as st
 import requests
-from PIL import Image
-import io
-import os
-from datetime import datetime
 import pandas as pd
+import io
+import re
+from PIL import Image
 
-# API Key (puedes mover a secrets.toml si deseas ocultarla)
+st.set_page_config(page_title="OCR Guías Transporte", layout="wide")
+st.title("📄 Extracción de Datos de Guías de Transporte de Petróleo")
+
 api_key = "K84668714088957"
 
-# Función para comprimir imágenes que superan 1 MB
-def reducir_tamano_imagen(imagen_pil):
-    buffer = io.BytesIO()
-    calidad = 95
-    while True:
-        buffer.seek(0)
-        imagen_pil.save(buffer, format="JPEG", quality=calidad)
-        if buffer.tell() <= 1024 * 1024 or calidad <= 20:
-            break
-        calidad -= 5
-    buffer.seek(0)
-    return buffer
-
-# Enviar imagen a OCR.space
-def enviar_a_ocr(imagen):
-    imagen_pil = Image.open(imagen).convert("RGB")
-    imagen_bytes = reducir_tamano_imagen(imagen_pil)
-
-    response = requests.post(
-        "https://api.ocr.space/parse/image",
-        files={"filename": imagen_bytes},
-        data={"apikey": api_key, "language": "spa"},
-    )
-    result = response.json()
-    if result.get("IsErroredOnProcessing"):
-        return None, result.get("ErrorMessage", "Error desconocido")
-    return result["ParsedResults"][0]["ParsedText"], None
-
-# Función de extracción estructurada
-def extraer_datos(texto):
-    datos = {
-        "Datos Generales": {
-            "Número de Guía": extraer_por_patron(texto, r"Número de Gu[ií]a[:\s]*([0-9]{3,})"),
-            "Número de Factura/Remisión": extraer_por_patron(texto, r"(Factura|Remisión)[^\d]*([0-9]{5,})"),
-            "Lugar y Fecha de Expedición": extraer_por_patron(texto, r"(?i)LUGAR Y FECHA DE EXPEDICIÓN[:\s]*(.*)"),
-            "Planta o Campo Productor": extraer_por_patron(texto, r"PLANTA O CAMPO PRODUCTOR[:\s]*(.*)")
-        },
-        "Datos del Destinatario": {
-            "Despachado a": extraer_por_patron(texto, r"DESPACHADO A[:\s]*(.*)"),
-            "Dirección": extraer_por_patron(texto, r"DIRECCIÓN[:\s]*(.*)"),
-            "Ciudad": extraer_por_patron(texto, r"CIUDAD[:\s]*(.*)"),
-            "Código ONU": extraer_por_patron(texto, r"CÓDIGO[:\s]*([A-Z]{2,4}\s*\d{3,5})")
-        },
-        "Datos del Transporte": {
-            "Conductor": extraer_por_patron(texto, r"NOMBRE DEL CONDUCTOR[:\s]*(.*)"),
-            "Cédula": extraer_por_patron(texto, r"C[EÉ]DULA[:\s]*([0-9]{6,})"),
-            "Empresa Transportadora": extraer_por_patron(texto, r"EMPRESA TRANSPORTADORA[:\s]*(.*)"),
-            "Placa del Cabeza Tractora": extraer_por_patron(texto, r"CABEZOTE[:\s]*([A-Z]{3}\d{3})"),
-            "Placa del Tanque": extraer_por_patron(texto, r"TANQUE[:\s]*([A-Z]{1,3}\d{3,5})"),
-            "Lugar de Origen": extraer_por_patron(texto, r"LUGAR DE ORIGEN[:\s]*(.*)"),
-            "Lugar de Destino": extraer_por_patron(texto, r"LUGAR DE DESTINO[:\s]*(.*)"),
-            "Fecha y Hora de Salida": extraer_por_patron(texto, r"SALIDA[:\s]*(\d{2}/\d{2}/\d{4}.*)"),
-            "Vigencia de la Guía": extraer_por_patron(texto, r"VIGENCIA.*?(\d{1,3})\s*horas", flags=re.IGNORECASE)
-        },
-        "Descripción del Producto": {
-            "Producto": extraer_por_patron(texto, r"DESCRIPCI[ÓO]N DEL PRODUCTO[:\s]*(.*)"),
-            "Sellos": extraer_por_patron(texto, r"SELLO[S]?[:\s]*(\d{4,}-?\d*)"),
-            "API": extraer_por_patron(texto, r"A\.?P\.?I\.?[:\s]*([\d.]+)"),
-            "BSW (%)": extraer_por_patron(texto, r"B\.?S\.?W\.?[:\s]*([\d.]+)%?")
-        },
-        "Volumen Transportado": {
-            "Barriles Brutos": extraer_por_patron(texto, r"BRUTO[S]?[:\s]*([\d.]+)"),
-            "Barriles Netos": extraer_por_patron(texto, r"NETO[S]?[:\s]*([\d.]+)"),
-            "Barriles a 60°F": extraer_por_patron(texto, r"60.?F[:\s]*([\d.]+)")
-        }
-    }
-    return datos
-
-# Utilidad para extraer con regex
-import re
-def extraer_por_patron(texto, patron, flags=0):
-    match = re.search(patron, texto, flags)
-    return match.group(1).strip() if match else ""
-
-# Mostrar datos en forma de tablas por sección
-def mostrar_datos_estructurados(datos):
-    for seccion, campos in datos.items():
-        st.markdown(f"### 🟩 {seccion}")
-        df = pd.DataFrame(list(campos.items()), columns=["Campo", "Valor"])
-        st.table(df)
-
-# Crear DataFrame para Excel
-def crear_dataframe_para_excel(datos):
-    filas = []
-    for seccion, campos in datos.items():
-        for campo, valor in campos.items():
-            filas.append({"Sección": seccion, "Campo": campo, "Valor": valor})
-    return pd.DataFrame(filas)
-
-# INTERFAZ DE LA APP
-st.set_page_config(page_title="OCR Guías de Petróleo", layout="centered")
-st.title("📄 Extracción de Datos de Guías de Transporte de Crudo")
-
-imagen_subida = st.file_uploader("📤 Sube una imagen o escaneo de la guía", type=["jpg", "jpeg", "png", "pdf"])
-
-if imagen_subida:
-    st.image(imagen_subida, caption="Imagen cargada", use_column_width=True)
-    texto, error = enviar_a_ocr(imagen_subida)
-    if error:
-        st.error(f"❌ Error en OCR.space: {error}")
-    elif texto:
-        datos = extraer_datos(texto)
-        mostrar_datos_estructurados(datos)
-
-        df_excel = crear_dataframe_para_excel(datos)
-        buffer_excel = io.BytesIO()
-        df_excel.to_excel(buffer_excel, index=False, sheet_name="Datos OCR", engine="openpyxl")
-        buffer_excel.seek(0)
-
-        st.download_button(
-            label="⬇️ Descargar Excel",
-            data=buffer_excel,
-            file_name="datos_guia_ocr.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+def extraer_texto_ocr(image_file):
+    try:
+        response = requests.post(
+            "https://api.ocr.space/parse/image",
+            files={"filename": image_file},
+            data={"apikey": api_key, "OCREngine": 2},
         )
-    else:
-        st.warning("⚠️ No se pudo extraer texto de la imagen.")
+        result = response.json()
+        if result.get("IsErroredOnProcessing"):
+            st.error("❌ Error en OCR.space: " + str(result.get("ErrorMessage")))
+            return None
+        return result["ParsedResults"][0]["ParsedText"]
+    except Exception as e:
+        st.error(f"Error inesperado: {e}")
+        return None
 
+def extraer_campos(texto):
+    campos = {
+        "Fecha y Hora de Salida": buscar_fecha_hora(texto),
+        "Placa del Cabeza Tractora": buscar_placa(texto, tipo="tractora"),
+        "Placa del Tanque": buscar_placa(texto, tipo="tanque"),
+        "Número de Guía": buscar_numero_guia(texto),
+        "Empresa Transportadora": buscar_empresa(texto),
+        "Cédula": buscar_cedula(texto),
+        "Conductor": buscar_conductor(texto),
+        "Casilla 1": "",
+        "Lugar de Origen": buscar_origen(texto),
+        "Lugar de Destino": buscar_destino(texto),
+        "Barriles Brutos": buscar_barriles(texto, tipo="brutos"),
+        "Barriles Netos": buscar_barriles(texto, tipo="netos"),
+        "Barriles a 60°F": buscar_barriles(texto, tipo="60f"),
+        "API": buscar_api(texto),
+        "BSW (%)": buscar_bsw(texto),
+        "Vigencia de Guía": buscar_vigencia(texto),
+        "Casilla 2": "",
+        "Casilla 3": "",
+        "Casilla 4": "",
+        "Casilla 5": "",
+        "Casilla 6": "",
+        "Casilla 7": "",
+        "Sellos": buscar_sellos(texto),
+    }
+    return campos
+
+# Funciones auxiliares de extracción
+
+def buscar_fecha_hora(texto):
+    m = re.search(r"(\d{2}/\d{2}/\d{4}).*?(\d{1,2}:\d{2}\s?[APap][Mm])", texto)
+    return f"{m.group(1)} {m.group(2)}" if m else ""
+
+def buscar_placa(texto, tipo):
+    placas = re.findall(r"[A-Z]{3}\d{2,4}", texto)
+    if tipo == "tractora":
+        return placas[0] if placas else ""
+    if tipo == "tanque":
+        return placas[1] if len(placas) > 1 else ""
+    return ""
+
+def buscar_numero_guia(texto):
+    m = re.search(r"(?:número de )?gu[ií]a[:\s]*([\d]{3,})", texto, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+def buscar_empresa(texto):
+    m = re.search(r"empresa transportadora[:\s]*([\w\s\.\-]+)", texto, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+def buscar_cedula(texto):
+    m = re.search(r"c[eé]dula[:\s]*([\d\.]+)", texto, re.IGNORECASE)
+    return m.group(1).replace(".", "") if m else ""
+
+def buscar_conductor(texto):
+    m = re.search(r"conductor[:\s]*([\w\s\.\-]+)", texto, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+def buscar_origen(texto):
+    m = re.search(r"lugar de origen[:\s]*([\w\s\-]+)", texto, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+def buscar_destino(texto):
+    m = re.search(r"lugar de destino[:\s]*([\w\s\-]+)", texto, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+def buscar_barriles(texto, tipo):
+    if tipo == "brutos":
+        m = re.search(r"barriles brutos[:\s]*([\d\.]+)", texto, re.IGNORECASE)
+    elif tipo == "netos":
+        m = re.search(r"barriles netos[:\s]*([\d\.]+)", texto, re.IGNORECASE)
+    elif tipo == "60f":
+        m = re.search(r"60\s?[°]?F[:\s]*([\d\.]+)", texto, re.IGNORECASE)
+    else:
+        return ""
+    return m.group(1) if m else ""
+
+def buscar_api(texto):
+    m = re.search(r"api[:\s]*([\d\.]+)", texto, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+def buscar_bsw(texto):
+    m = re.search(r"bsw[:\s]*([\d\.]+)%?", texto, re.IGNORECASE)
+    return m.group(1) + "%" if m else ""
+
+def buscar_vigencia(texto):
+    m = re.search(r"vigencia.*?(\d{1,3})\s*(horas|hrs|h)", texto, re.IGNORECASE)
+    return m.group(1) + " horas" if m else ""
+
+def buscar_sellos(texto):
+    sellos = re.findall(r"\b\d{6}\b", texto)
+    return "-".join(sellos) if sellos else ""
+
+# UI
+uploaded_file = st.file_uploader("Sube una imagen de la guía", type=["png", "jpg", "jpeg"])
+
+if uploaded_file:
+    st.image(uploaded_file, caption="Imagen cargada", use_container_width=True)
+    texto_extraido = extraer_texto_ocr(uploaded_file)
+
+    if texto_extraido:
+        st.subheader("🧠 Texto extraído por OCR")
+        st.text_area("Texto OCR", texto_extraido, height=200)
+
+        st.subheader("📊 Datos extraídos de la guía")
+        datos = extraer_campos(texto_extraido)
+        df = pd.DataFrame(list(datos.items()), columns=["Campo", "Valor"])
+        st.dataframe(df, use_container_width=True)
+
+        buffer = io.BytesIO()
+        df.to_excel(buffer, index=False, sheet_name="Datos Guía")
+        st.download_button("⬇️ Descargar Excel", data=buffer.getvalue(), file_name="datos_guia.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
