@@ -1,118 +1,84 @@
 import streamlit as st
 import requests
-import pandas as pd
-import re
+import base64
+import json
+import io
 from PIL import Image
-from io import BytesIO
+import re
 
-# --- Comprime imágenes al vuelo ---
-def comprimir_imagen(image_file, max_size_kb=1000):
-    imagen = Image.open(image_file)
-    output = BytesIO()
+# ---- CONFIG ----
+OCR_SPACE_API_KEY = 'K84668714088957'
+OCR_SPACE_URL = 'https://api.ocr.space/parse/image'
 
-    # Redimensionar si es muy grande (ancho máximo 1024 px)
-    max_ancho = 1024
-    if imagen.width > max_ancho:
-        ratio = max_ancho / float(imagen.width)
-        nuevo_alto = int((float(imagen.height) * float(ratio)))
-        imagen = imagen.resize((max_ancho, nuevo_alto))
+# ---- FUNCIONES ----
+def comprimir_imagen(imagen, calidad=30):
+    imagen_io = io.BytesIO()
+    imagen.save(imagen_io, format='JPEG', quality=calidad)
+    imagen_io.seek(0)
+    return imagen_io
 
-    # Guardar como JPEG optimizado
-    imagen = imagen.convert("RGB")  # Para asegurar compatibilidad JPEG
-    calidad = 85  # Puedes ajustar esto (85 es buena compresión sin perder mucho detalle)
-
-    imagen.save(output, format="JPEG", optimize=True, quality=calidad)
-    output.seek(0)
-    return output
-
-# --- Función OCR.space con compresión integrada ---
-def ocr_space_file(uploaded_file, api_key='K84668714088957', language='spa'):
-    # Comprimir si es imagen
-    if uploaded_file.type.startswith("image/"):
-        archivo_procesado = comprimir_imagen(uploaded_file)
-        filename = "comprimido.jpg"
-    else:
-        archivo_procesado = uploaded_file
-        filename = uploaded_file.name
-
-    result = requests.post(
-        'https://api.ocr.space/parse/image',
-        files={'filename': (filename, archivo_procesado)},
-        data={'apikey': api_key, 'language': language},
+def subir_a_ocr_space(imagen_bytes):
+    response = requests.post(
+        OCR_SPACE_URL,
+        files={"file": ("imagen.jpg", imagen_bytes)},
+        data={"apikey": OCR_SPACE_API_KEY, "language": "spa"}
     )
-    return result.json()
+    return response.json()
 
-# --- Función para extraer los campos del texto OCR ---
 def extraer_datos_guia(texto):
-    def buscar(patron):
+    def buscar(patron, default=""):
         match = re.search(patron, texto, re.IGNORECASE)
-        return match.group(1).strip() if match else ""
+        return match.group(1).strip() if match else default
 
     datos = {
-        "Fecha y hora de salida": buscar(r"Fecha y Hora de Salida\s*[:\-]?\s*(.*)"),
-        "Placa del cabeza tractora": buscar(r"Placa del Cabeza Tractora\s*[:\-]?\s*(.*)"),
-        "Placa del tanque": buscar(r"Placa del Tanque\s*[:\-]?\s*(.*)"),
-        "Número de guía": buscar(r"Número de Gu[ií]a\s*[:\-]?\s*(\d+)"),
-        "Empresa transportadora": buscar(r"Empresa Transportadora\s*[:\-]?\s*(.*)"),
-        "Cédula": buscar(r"C[eé]dula\s*[:\-]?\s*(\d{5,})"),
-        "Conductor": buscar(r"Conductor\s*[:\-]?\s*(.*)"),
+        "Fecha y hora de salida": buscar(r"FECHA Y HORA DE SALIDA\s*(\d{1,2}[:.]\d{2})", ""),
+        "Placa del cabeza tractora": buscar(r"PLACAS DEL CABEZOTE\s*(\w+)", ""),
+        "Placa del tanque": buscar(r"PLACAS DEL TANQUE\s*(\w+)", ""),
+        "Número de guía": buscar(r"\b(\d{3,6})\b", ""),
+        "Empresa transportadora": buscar(r"EMPRESA TRANSPORTADORA\s*([\w!¡]+)", ""),
+        "Cédula": buscar(r"C[ÉE]DULA\s*(\d+)", ""),
+        "Conductor": buscar(r"CONDUCTOR\s*([A-ZÁÉÍÓÚÑ\s]+)", ""),
         "Casilla vacía 1": "",
-        "Lugar de origen": buscar(r"Lugar de Origen\s*[:\-]?\s*(.*)"),
-        "Lugar de destino": buscar(r"Lugar de Destino\s*[:\-]?\s*(.*)"),
-        "Barriles brutos": buscar(r"Barriles Brutos\s*[:\-]?\s*([\d.,]+)"),
-        "Barriles netos": buscar(r"Barriles Netos\s*[:\-]?\s*([\d.,]+)"),
-        "Barriles a 60°F": buscar(r"Barriles a 60.?F\s*[:\-]?\s*([\d.,]+)"),
-        "API": buscar(r"API\s*[:\-]?\s*([\d.]+)"),
-        "BSW \(%\)": buscar(r"BSW\s*\(%\)\s*[:\-]?\s*([\d.,]+%)"),
-        "Vigencia de guía": buscar(r"Vigencia de la Gu[ií]a\s*[:\-]?\s*(.*)"),
+        "Lugar de origen": buscar(r"LUGAR DE ORIGEN\s*(.+)", ""),
+        "Lugar de destino": buscar(r"LUGAR DE DESTINO\s*(.+)", ""),
+        "Barriles brutos": buscar(r"BARRILES.*?(\d{2,4}[.,]\d{2})", ""),
+        "Barriles netos": buscar(r"NETOS\s*(\d{2,4}[.,]\d{2})", ""),
+        "Barriles a 60°F": buscar(r"@\s*6C?F\s*(\d{2,4}[.,]\d{2})", ""),
+        "API": buscar(r"API\s*[:\-]?\s*([\d.]+)", ""),
+        "BSW (%)": buscar(r"BSW.*?([\d.,]+)%", ""),
+        "Vigencia de guía": buscar(r"HORAS DE VIGENCIA\s*(\d+\s*HORAS?)", ""),
         "Casilla vacía 2": "",
         "Casilla vacía 3": "",
         "Casilla vacía 4": "",
         "Casilla vacía 5": "",
         "Casilla vacía 6": "",
-        "Sellos": buscar(r"Sellos\s*[:\-]?\s*(.*)")
+        "Sellos": buscar(r"SELLOS\s*[:\-]?\s*(.*)", "")
     }
     return datos
 
-# --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Extractor de Guías - OCR", layout="centered")
-st.title("📦 Extracción de Guías con OCR.space")
+# ---- INTERFAZ ----
+st.title("🧾 Extracción de Guía con OCR.space")
 
-uploaded_file = st.file_uploader("Sube una imagen o PDF escaneado de la guía", type=["jpg", "jpeg", "png", "pdf"])
+imagen_subida = st.file_uploader("Sube la imagen de la guía (máx. 1MB sin comprimir)", type=["jpg", "jpeg", "png"])
 
-# Entrada de texto manual opcional
-st.subheader("✍️ O pega aquí texto OCR manual (para pruebas):")
-input_text = st.text_area("Texto OCR", height=300)
+if imagen_subida:
+    imagen = Image.open(imagen_subida).convert("RGB")
+    imagen_comprimida = comprimir_imagen(imagen, calidad=30)
 
-# BOTÓN de procesamiento
-if st.button("🔍 Procesar"):
-    texto = ""
+    with st.spinner("Analizando con OCR.space..."):
+        resultado = subir_a_ocr_space(imagen_comprimida)
 
-    if uploaded_file:
-        st.info("⏳ Enviando a OCR.space con compresión automática...")
-        result = ocr_space_file(uploaded_file)
-        st.write("🧪 Resultado crudo del OCR:", result)
-
-        try:
-            texto = result['ParsedResults'][0]['ParsedText']
-        except (KeyError, IndexError):
-            st.error("❌ No se pudo leer texto OCR. Verifica la imagen.")
-    elif input_text.strip():
-        texto = input_text.strip()
+    if resultado.get("IsErroredOnProcessing"):
+        st.error("❌ Error en el procesamiento OCR: " + ", ".join(resultado.get("ErrorMessage", [])))
     else:
-        st.warning("⚠️ Debes subir una imagen o pegar texto OCR.")
+        texto_crudo = resultado['ParsedResults'][0]['ParsedText']
+        st.text_area("🧪 Resultado crudo del OCR:", texto_crudo, height=200)
 
-    if texto:
-        st.success("✅ Texto OCR recibido correctamente.")
-        st.text_area("📄 Texto detectado por OCR", value=texto, height=250)
+        datos_extraidos = extraer_datos_guia(texto_crudo)
+        st.success("✅ Datos extraídos:")
+        for campo, valor in datos_extraidos.items():
+            st.write(f"**{campo}:** {valor}")
 
-        datos = extraer_datos_guia(texto)
-        df = pd.DataFrame([datos])
-        st.subheader("📋 Datos extraídos:")
-        st.dataframe(df)
-
-        output = BytesIO()
-        df.to_excel(output, index=False)
-        st.download_button("⬇️ Descargar Excel", data=output.getvalue(), file_name="datos_guia.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.error("❌ No se detectó texto válido para procesar.")
+        # Botón para exportar a Excel si se desea agregar
+        # pd.DataFrame([datos_extraidos]).to_excel("guia_extraida.xlsx", index=False)
+        # st.download_button("📥 Descargar Excel", data=open("guia_extraida.xlsx", "rb"), file_name="guia.xlsx")
