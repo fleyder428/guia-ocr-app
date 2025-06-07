@@ -1,12 +1,37 @@
-import pytesseract
-import re
-from PIL import Image
+import requests
+from io import BytesIO
 
 def extraer_datos_clave(imagen):
-    # Usar pytesseract para extraer texto de la imagen
-    texto = pytesseract.image_to_string(imagen, lang='spa')
+    # Convertir imagen PIL a bytes para enviar a OCR.Space
+    buffered = BytesIO()
+    imagen.save(buffered, format="PNG")
+    img_bytes = buffered.getvalue()
 
-    # Diccionario con las claves en el orden requerido
+    # Tu API key de OCR.Space
+    API_KEY = "K84668714088957"  # <-- ya colocada aquí
+
+    # Configurar petición POST a OCR.Space
+    payload = {
+        'isOverlayRequired': False,
+        'apikey': API_KEY,
+        'language': 'spa',
+    }
+
+    files = {
+        'filename': ('image.png', img_bytes)
+    }
+
+    response = requests.post('https://api.ocr.space/parse/image',
+                             data=payload,
+                             files=files)
+
+    result = response.json()
+
+    if result.get('IsErroredOnProcessing'):
+        return {"Error": "No se pudo procesar la imagen OCR"}
+
+    texto = result['ParsedResults'][0]['ParsedText']
+
     campos = [
         "Fecha y hora de salida",
         "Placa del cabeza tractora",
@@ -24,11 +49,10 @@ def extraer_datos_clave(imagen):
         "API",
         "BSW (%)",
         "Vigencia de guía",
-        "", "", "", "", "", "",  # 6 casillas en blanco
+        "", "", "", "", "", "",
         "Sellos"
     ]
 
-    # Crear diccionario para los resultados, inicialmente vacíos o blancos donde toca
     resultados = {}
     for campo in campos:
         if campo == "":
@@ -36,14 +60,12 @@ def extraer_datos_clave(imagen):
         else:
             resultados[campo] = ""
 
-    # Aquí podrías mejorar con expresiones regulares específicas para extraer cada dato
-    # Por ahora, como ejemplo, intentaremos extraer líneas basadas en las claves (simplificado)
-
     for linea in texto.split('\n'):
         for campo in campos:
             if campo and campo.lower() in linea.lower():
-                # Extraer texto después de la clave (ejemplo simple)
-                valor = linea.split(":")[-1].strip()
-                resultados[campo] = valor
+                partes = linea.split(":")
+                if len(partes) > 1:
+                    valor = partes[1].strip()
+                    resultados[campo] = valor
 
     return resultados
