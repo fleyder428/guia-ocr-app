@@ -84,7 +84,30 @@ if archivo_subido:
                 texto_ocr = ocr_space_api(imagen_bytes)
                 datos = extraer_datos_clave(texto_ocr)
 
+                # Orden y columnas exactas que quieres
+                columnas_ordenadas = [
+                    "Fecha y hora de salida",
+                    "Placa del cabeza tractora",
+                    "Placa del tanque",
+                    "Número de guía",
+                    "Empresa transportadora",
+                    "Cédula",
+                    "Conductor",
+                    "Lugar de origen",
+                    "Lugar de destino",
+                    "Barriles brutos",
+                    "Barriles netos",
+                    "Barriles a 60°F",
+                    "API",
+                    "BSW (%)",
+                    "Vigencia de guía",
+                    "Sellos"
+                ]
+
                 df = pd.DataFrame([datos])
+                # Seleccionar sólo las columnas indicadas y en ese orden
+                df = df.reindex(columns=columnas_ordenadas)
+
                 st.success("✅ Datos extraídos correctamente")
                 st.dataframe(df)
 
