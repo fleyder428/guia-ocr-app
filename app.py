@@ -23,14 +23,14 @@ if uploaded_file:
             st.dataframe(df)
 
             # Exportar a Excel
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine='openpyxl') as writer:
-    df.to_excel(writer, index=False, sheet_name="Guía")
-output.seek(0)
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name="Guía")
+            output.seek(0)
 
-st.download_button(
-    label="⬇️ Descargar Excel",
-    data=output,
-    file_name="guia_extraida.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+            st.download_button(
+                label="⬇️ Descargar Excel",
+                data=output,
+                file_name="guia_extraida.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
