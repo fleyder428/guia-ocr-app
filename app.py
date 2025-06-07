@@ -1,7 +1,7 @@
 import streamlit as st
 import re
 import pandas as pd
-
+import io
 # Función para limpiar texto OCR y normalizar espacios y caracteres básicos
 def limpiar_texto(texto):
     texto = texto.replace('\n', ' ').replace('\r', ' ')
