@@ -26,7 +26,7 @@ if uploaded_file:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name="Guía")
-                writer.save()
+                writer.close()
             output.seek(0)
 
             st.download_button(
