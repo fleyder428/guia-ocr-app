@@ -5,10 +5,10 @@ import io
 import pandas as pd
 import re
 
-st.set_page_config(page_title="Extractor de Guías de Crudo Adaptado", layout="centered")
-st.title("🛢️ Extractor Adaptado de Guías con OCR Flexible")
+st.set_page_config(page_title="Extractor Flexible de Guías de Crudo", layout="centered")
+st.title("🛢️ Extractor de Guías con OCR flexible y limpieza")
 
-api_key = "K84668714088957"  # Pon tu API Key aquí
+api_key = "K84668714088957"  # Pon tu API key aquí
 
 def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
     img = Image.open(image_file)
@@ -39,57 +39,89 @@ def extract_text_from_image(image):
         return ""
     return result_json["ParsedResults"][0]["ParsedText"]
 
-def search_flexible(text, keywords, multiline=False):
-    """
-    Busca palabras clave similares en el texto para extraer el valor.
-    keywords: lista de palabras clave posibles (strings)
-    multiline: si True busca en línea siguiente si no encuentra en la misma línea.
-    """
+def normalize_text(text):
+    # Correcciones comunes de errores OCR
+    replacements = {
+        "LUCAR": "LUGAR",
+        "GIJíA": "GUÍA",
+        "TECPETROL": "TEC PETROL",
+        "PETROLEL$*Á": "PETRÓLEO",
+        "PETROLEEM": "PETRÓLEO",
+        "CÉDU": "CÉDULA",
+        "ESTAC$b'4": "ESTACIÓN",
+        "R773fi1": "R77361",
+        "EARR\\LES": "BARRILES",
+        "HOPAS VICENCIA": "HOPAS VICENCIA",
+        "DESCRIPCION": "DESCRIPCIÓN",
+        "ANÁLISIS OE LABORATOPd9J530f_": "ANÁLISIS DE LABORATORIO",
+        # Agrega otros reemplazos según encuentres
+    }
+    for wrong, right in replacements.items():
+        text = re.sub(wrong, right, text, flags=re.IGNORECASE)
+    return text
+
+def flexible_search(text, keywords, after_colon=True, multiline=True):
     lines = text.splitlines()
     for i, line in enumerate(lines):
         for kw in keywords:
             if kw.lower() in line.lower():
-                # Intenta extraer después de ":" en la misma línea
                 parts = re.split(r"[:\-]", line, maxsplit=1)
                 if len(parts) > 1 and parts[1].strip():
                     return parts[1].strip()
-                # Si no hay ":" o nada después, intenta línea siguiente si multiline=True
                 if multiline and i + 1 < len(lines):
-                    return lines[i + 1].strip()
+                    val_next = lines[i+1].strip()
+                    # Si la siguiente línea no contiene otra keyword, devolverla
+                    if val_next and not any(k.lower() in val_next.lower() for k in keywords):
+                        return val_next
+    return ""
+
+def extract_number_from_text(text, pattern):
+    match = re.search(pattern, text)
+    if match:
+        return match.group(0).replace(",", ".")
     return ""
 
 def extract_fields(text):
-    # Lista de posibles keywords para cada campo (más flexibles)
-    fields_keywords = [
-        ["fecha y hora de salida", "fecha salida", "fecha y hora", "salida"],  # Fecha y hora de salida
-        ["placa del cabezote", "placas del cabezote", "placa cabeza tractora", "placa cabeza", "placa tractora"],  # Placa cabeza tractora
-        ["placas del tanque", "placa tanque"],  # Placa tanque
-        ["número de guía", "numero de guia", "guía", "guia", "número guia"],  # Número de guía
-        ["empresa transportadora", "transportadora"],  # Empresa transportadora
-        ["cédula", "cedula"],  # Cédula
-        ["nombre del conductor", "conductor"],  # Conductor
-        [],  # Casilla en blanco
-        ["lugar de origen", "origen"],  # Lugar de origen
-        ["lugar de destino", "destino"],  # Lugar de destino
-        ["barriles brutos", "barriles", "volumen en barriles", "volumen en sarrles"],  # Barriles brutos (flexible)
-        ["barriles netos", "netos"],  # Barriles netos
-        ["barriles a 60", "barriles a 60°f"],  # Barriles a 60°F
-        ["api"],  # API
-        ["bsw", "bsw (%)"],  # BSW
-        ["horas de vigencia", "vigencia"],  # Vigencia de guía
-        [], [], [], [], [], [],  # Seis casillas en blanco
-        ["sellos", "sello"],  # Sellos
-    ]
+    text = normalize_text(text)
 
-    extracted = []
-    for kw_list in fields_keywords:
-        if len(kw_list) == 0:
-            # Casilla en blanco
-            extracted.append("")
-        else:
-            val = search_flexible(text, kw_list, multiline=True)
-            extracted.append(val)
-    return extracted
+    data = []
+    # Orden personalizado:
+    data.append(flexible_search(text, ["fecha y hora de salida", "fecha salida", "fecha y hora", "salida"]))
+    data.append(flexible_search(text, ["placas del cabezote", "placa cabeza tractora", "placas del cabezote", "placa cabezote"]))
+    data.append(flexible_search(text, ["placas del tanque", "placa tanque"]))
+    data.append(flexible_search(text, ["número de guía", "numero de guia", "guía", "guia", "factura o remisión no", "factura"]))
+    data.append(flexible_search(text, ["empresa transportadora", "transportadora"]))
+    data.append(flexible_search(text, ["cédula", "cedula", "céd"]))
+    data.append(flexible_search(text, ["nombre del conductor", "conductor"]))
+    data.append("")  # Casilla en blanco
+    data.append(flexible_search(text, ["lugar de origen", "origen", "lugar de expedición", "planta o campo productor", "cpf"]))
+    data.append(flexible_search(text, ["lugar de destino", "destino"]))
+
+    # Extraer barriles con búsqueda flexible
+    barriles_brutos = flexible_search(text, ["barriles brutos", "volumen en barriles", "barriles"])
+    if not barriles_brutos:
+        barriles_brutos = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
+    data.append(barriles_brutos)
+
+    barriles_netos = flexible_search(text, ["barriles netos", "netos"])
+    if not barriles_netos:
+        barriles_netos = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
+    data.append(barriles_netos)
+
+    barriles_60 = flexible_search(text, ["barriles a 60", "barriles a 60°f"])
+    if not barriles_60:
+        barriles_60 = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
+    data.append(barriles_60)
+
+    data.append(flexible_search(text, ["api"]))
+    data.append(flexible_search(text, ["bsw", "bsw (%)"]))
+    data.append(flexible_search(text, ["horas de vigencia", "vigencia"]))
+
+    data.extend([""] * 6)  # Seis casillas en blanco
+
+    data.append(flexible_search(text, ["sellos", "sello"]))
+
+    return data
 
 uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
 
@@ -101,7 +133,7 @@ if uploaded_file:
         texto_extraido = extract_text_from_image(image_compressed)
 
     if texto_extraido:
-        st.subheader("📝 Texto extraído (verifica para ajustes):")
+        st.subheader("📝 Texto extraído (revisar):")
         st.text_area("Texto OCR", texto_extraido, height=300)
 
         datos_extraidos = extract_fields(texto_extraido)
