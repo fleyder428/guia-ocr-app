@@ -3,21 +3,11 @@ from PIL import Image
 import requests
 import io
 import pandas as pd
+import re
 
-API_KEY = "K84668714088957"  # Tu clave API OCR.space
+API_KEY = "K84668714088957"  # Tu clave API de OCR.space
 
-# Comprime la imagen si es muy grande
-def comprimir_imagen(imagen, max_width=1000):
-    ancho, alto = imagen.size
-    if ancho > max_width:
-        ratio = max_width / ancho
-        nuevo_alto = int(alto * ratio)
-        imagen = imagen.resize((max_width, nuevo_alto), Image.ANTIALIAS)
-    buffer = io.BytesIO()
-    imagen.save(buffer, format="JPEG", quality=70)
-    return buffer.getvalue()
-
-# Llama a la API de OCR.space
+# 🔍 Función que envía la imagen a OCR.space
 def ocr_space_api(imagen_bytes):
     url_api = "https://api.ocr.space/parse/image"
     archivos = {
@@ -35,7 +25,35 @@ def ocr_space_api(imagen_bytes):
     texto = resultado['ParsedResults'][0]['ParsedText']
     return texto
 
-# Interfaz de Streamlit
+# 🔎 Extrae datos clave del texto OCR
+def extraer_datos_clave(texto):
+    def buscar_patron(patrones):
+        for patron in patrones:
+            match = re.search(patron, texto, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    return {
+        "Fecha y hora de salida": buscar_patron([r"(?:salida.*?)[:\-]\s*(\S.+)", r"FECHA.*?SALIDA.*?[:\-]?\s*(\S.+)"]),
+        "Placa del cabeza tractora": buscar_patron([r"placa.*?cabeza.*?[:\-]?\s*([A-Z0-9\-]+)"]),
+        "Placa del tanque": buscar_patron([r"placa.*?tanque.*?[:\-]?\s*([A-Z0-9\-]+)"]),
+        "Número de guía": buscar_patron([r"gu[ií]a.*?[:\-]?\s*([A-Z0-9\-]+)"]),
+        "Empresa transportadora": buscar_patron([r"empresa transportadora\s*[:\-]?\s*(.*)"]),
+        "Cédula": buscar_patron([r"c[eé]dula.*?[:\-]?\s*([0-9\.]+)"]),
+        "Conductor": buscar_patron([r"(?:nombre del conductor|conductor)\s*[:\-]?\s*([A-ZÑÁÉÍÓÚ ]{5,})"]),
+        "Lugar de origen": buscar_patron([r"lugar de origen\s*[:\-]?\s*(.*)"]),
+        "Lugar de destino": buscar_patron([r"lugar de destino\s*[:\-]?\s*(.*)"]),
+        "Barriles brutos": buscar_patron([r"brutos\s*[:\-]?\s*([\d.,]+)"]),
+        "Barriles netos": buscar_patron([r"netos\s*[:\-]?\s*([\d.,]+)"]),
+        "Barriles a 60°F": buscar_patron([r"60\s*°\s*f\s*[:\-]?\s*([\d.,]+)"]),
+        "API": buscar_patron([r"\bAPI\b\s*[:\-]?\s*([\d.,]+)"]),
+        "BSW (%)": buscar_patron([r"\bBSW\b.*?%?\s*[:\-]?\s*([\d.,]+)"]),
+        "Vigencia de guía": buscar_patron([r"(?:horas de vigencia|vigencia)\s*[:\-]?\s*([\d]+)\s*horas?"]),
+        "Sellos": buscar_patron([r"(?:sello|sellos)\s*[:\-]?\s*(.*)"]),
+    }
+
+# 🎯 Streamlit UI
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
 st.title("📄 Extracción Inteligente de Guías - OCR")
 
@@ -43,26 +61,42 @@ archivo_subido = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg
 
 if archivo_subido:
     imagen = Image.open(archivo_subido)
-    st.image(imagen, caption="Imagen cargada", use_column_width=True)
 
-    if st.button("🔍 Extraer texto OCR"):
-        with st.spinner("Procesando imagen con OCR.space..."):
+    # Reducir tamaño si pasa de 1MB
+    buf_original = io.BytesIO()
+    imagen.save(buf_original, format='JPEG', quality=70, optimize=True)
+    imagen_bytes = buf_original.getvalue()
+
+    if len(imagen_bytes) > 1024 * 1024:
+        escala = 1024 * 1024 / len(imagen_bytes)
+        nueva_ancho = int(imagen.width * escala**0.5)
+        nueva_alto = int(imagen.height * escala**0.5)
+        imagen = imagen.resize((nueva_ancho, nueva_alto), Image.Resampling.LANCZOS)
+        buf_reducido = io.BytesIO()
+        imagen.save(buf_reducido, format='JPEG', quality=70)
+        imagen_bytes = buf_reducido.getvalue()
+
+    st.image(imagen, caption="Imagen cargada", use_container_width=True)
+
+    if st.button("🔍 Extraer datos"):
+        with st.spinner("Procesando con OCR.space..."):
             try:
-                imagen_bytes = comprimir_imagen(imagen)
                 texto_ocr = ocr_space_api(imagen_bytes)
-                st.text_area("📝 Texto OCR detectado:", texto_ocr, height=300)
+                datos = extraer_datos_clave(texto_ocr)
 
-                # Guardar en Excel
-                datos = {"Texto extraído": texto_ocr.replace("\n", " ")}
                 df = pd.DataFrame([datos])
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                st.success("✅ Datos extraídos correctamente")
+                st.dataframe(df)
+
+                # Exportar a Excel
+                excel = io.BytesIO()
+                with pd.ExcelWriter(excel, engine="openpyxl") as writer:
                     df.to_excel(writer, index=False, sheet_name="Guía")
-                output.seek(0)
+                excel.seek(0)
 
                 st.download_button(
                     label="⬇️ Descargar Excel",
-                    data=output,
+                    data=excel,
                     file_name="guia_extraida.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
