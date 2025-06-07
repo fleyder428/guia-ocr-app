@@ -1,6 +1,9 @@
 import streamlit as st
 import requests
 
+# API key directamente en el código
+api_key = "K84668714088957"
+
 def ocr_space_api(image_bytes, api_key):
     """Enviar imagen a OCR.space y devolver texto reconocido."""
     url_api = "https://api.ocr.space/parse/image"
@@ -27,16 +30,9 @@ def ocr_space_api(image_bytes, api_key):
 
 st.title("OCR.space con Streamlit")
 
-# Obtener API key
-try:
-    api_key = st.secrets["ocr_space_api_key"]
-except KeyError:
-    st.warning("No se encontró la clave 'ocr_space_api_key' en secrets.toml. Usando clave fija para pruebas.")
-    api_key = "TU_API_KEY_REAL_AQUI"  # Cambia esto con tu clave para pruebas locales
-
 uploaded_file = st.file_uploader("Sube una imagen para extraer texto (PNG, JPG, etc.)", type=["png", "jpg", "jpeg"])
 
-if uploaded_file and api_key:
+if uploaded_file:
     bytes_data = uploaded_file.read()
     with st.spinner("Procesando OCR..."):
         text = ocr_space_api(bytes_data, api_key)
