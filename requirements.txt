@@ -1,6 +1,5 @@
 streamlit
-pytesseract
-pillow
+requests
+Pillow
 pandas
 openpyxl
-requests
