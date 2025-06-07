@@ -1,46 +1,14 @@
 import streamlit as st
 import requests
-from PIL import Image
-import io
-import pandas as pd
 import re
+import pandas as pd
+from io import BytesIO
 
-st.set_page_config(page_title="Extractor Flexible de Guías de Crudo", layout="centered")
-st.title("🛢️ Extractor de Guías con OCR flexible y limpieza")
-
-api_key = "K84668714088957"  # Pon tu API key aquí
-
-def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
-    img = Image.open(image_file)
-    img = img.convert("RGB")
-    img.thumbnail(max_size)
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=quality)
-    buffer.seek(0)
-    return buffer
-
-def extract_text_from_image(image):
-    url_api = "https://api.ocr.space/parse/image"
-    files = {
-        "filename": ("image.jpg", image, "image/jpeg")
-    }
-    result = requests.post(
-        url_api,
-        files=files,
-        data={
-            "apikey": api_key,
-            "language": "spa",
-            "isOverlayRequired": False,
-        },
-    )
-    result_json = result.json()
-    if result_json.get("IsErroredOnProcessing"):
-        st.error(f"❌ Error en OCR.space: {result_json.get('ErrorMessage')}")
-        return ""
-    return result_json["ParsedResults"][0]["ParsedText"]
+# Tu API Key de OCR.space, reemplaza aquí o usa st.secrets
+api_key = "K84668714088957"
 
 def normalize_text(text):
-    # Correcciones comunes de errores OCR
+    # Correcciones comunes de errores OCR, usando re.escape para evitar errores de regex
     replacements = {
         "LUCAR": "LUGAR",
         "GIJíA": "GUÍA",
@@ -50,111 +18,190 @@ def normalize_text(text):
         "CÉDU": "CÉDULA",
         "ESTAC$b'4": "ESTACIÓN",
         "R773fi1": "R77361",
+        "VOLUMEN EN BARRILES": "VOLUMEN EN BARRILES",
         "EARR\\LES": "BARRILES",
-        "HOPAS VICENCIA": "HOPAS VICENCIA",
-        "DESCRIPCION": "DESCRIPCIÓN",
         "ANÁLISIS OE LABORATOPd9J530f_": "ANÁLISIS DE LABORATORIO",
-        # Agrega otros reemplazos según encuentres
     }
     for wrong, right in replacements.items():
-        text = re.sub(wrong, right, text, flags=re.IGNORECASE)
+        text = re.sub(re.escape(wrong), right, text, flags=re.IGNORECASE)
     return text
-
-def flexible_search(text, keywords, after_colon=True, multiline=True):
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        for kw in keywords:
-            if kw.lower() in line.lower():
-                parts = re.split(r"[:\-]", line, maxsplit=1)
-                if len(parts) > 1 and parts[1].strip():
-                    return parts[1].strip()
-                if multiline and i + 1 < len(lines):
-                    val_next = lines[i+1].strip()
-                    # Si la siguiente línea no contiene otra keyword, devolverla
-                    if val_next and not any(k.lower() in val_next.lower() for k in keywords):
-                        return val_next
-    return ""
-
-def extract_number_from_text(text, pattern):
-    match = re.search(pattern, text)
-    if match:
-        return match.group(0).replace(",", ".")
-    return ""
 
 def extract_fields(text):
     text = normalize_text(text)
 
-    data = []
-    # Orden personalizado:
-    data.append(flexible_search(text, ["fecha y hora de salida", "fecha salida", "fecha y hora", "salida"]))
-    data.append(flexible_search(text, ["placas del cabezote", "placa cabeza tractora", "placas del cabezote", "placa cabezote"]))
-    data.append(flexible_search(text, ["placas del tanque", "placa tanque"]))
-    data.append(flexible_search(text, ["número de guía", "numero de guia", "guía", "guia", "factura o remisión no", "factura"]))
-    data.append(flexible_search(text, ["empresa transportadora", "transportadora"]))
-    data.append(flexible_search(text, ["cédula", "cedula", "céd"]))
-    data.append(flexible_search(text, ["nombre del conductor", "conductor"]))
-    data.append("")  # Casilla en blanco
-    data.append(flexible_search(text, ["lugar de origen", "origen", "lugar de expedición", "planta o campo productor", "cpf"]))
-    data.append(flexible_search(text, ["lugar de destino", "destino"]))
+    # Inicializar diccionario con las claves y valores vacíos para mantener el orden
+    campos = {
+        "Fecha y Hora de Salida": "",
+        "Placa del Cabeza Tractora": "",
+        "Placa del Tanque": "",
+        "Número de Guía": "",
+        "Empresa Transportadora": "",
+        "Cédula": "",
+        "Conductor": "",
+        "Casilla en Blanco 1": "",
+        "Lugar de Origen": "",
+        "Lugar de Destino": "",
+        "Barriles Brutos": "",
+        "Barriles Netos": "",
+        "Barriles a 60°F": "",
+        "API": "",
+        "BSW (%)": "",
+        "Vigencia de la Guía": "",
+        "Casilla en Blanco 2": "",
+        "Casilla en Blanco 3": "",
+        "Casilla en Blanco 4": "",
+        "Casilla en Blanco 5": "",
+        "Casilla en Blanco 6": "",
+        "Sellos": ""
+    }
 
-    # Extraer barriles con búsqueda flexible
-    barriles_brutos = flexible_search(text, ["barriles brutos", "volumen en barriles", "barriles"])
-    if not barriles_brutos:
-        barriles_brutos = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
-    data.append(barriles_brutos)
+    # Buscar con regex cada campo clave basado en posibles patrones comunes
 
-    barriles_netos = flexible_search(text, ["barriles netos", "netos"])
-    if not barriles_netos:
-        barriles_netos = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
-    data.append(barriles_netos)
+    # Fecha y hora de salida (buscando una fecha en formato dd/mm/yyyy o similar)
+    fecha_salida = re.search(r'FECHA Y HORA DE SALIDA\s*[:\-]?\s*([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4}(?:\s*-\s*[0-9]{1,2}:[0-9]{2}(?:\s*[APMapm]{2})?)?)', text, re.IGNORECASE)
+    if fecha_salida:
+        campos["Fecha y Hora de Salida"] = fecha_salida.group(1).strip()
 
-    barriles_60 = flexible_search(text, ["barriles a 60", "barriles a 60°f"])
-    if not barriles_60:
-        barriles_60 = extract_number_from_text(text, r"\b\d{2,4}[.,]\d{1,2}\b")
-    data.append(barriles_60)
+    # Placa del cabeza tractora
+    placa_cabeza = re.search(r'PLACAS DEL CABEZOTE\s*[:\-]?\s*([A-Z0-9\-]+)', text, re.IGNORECASE)
+    if placa_cabeza:
+        campos["Placa del Cabeza Tractora"] = placa_cabeza.group(1).strip()
 
-    data.append(flexible_search(text, ["api"]))
-    data.append(flexible_search(text, ["bsw", "bsw (%)"]))
-    data.append(flexible_search(text, ["horas de vigencia", "vigencia"]))
+    # Placa del tanque
+    placa_tanque = re.search(r'PLACAS DEL TANQUE\s*[:\-]?\s*([A-Z0-9\-]+)', text, re.IGNORECASE)
+    if placa_tanque:
+        campos["Placa del Tanque"] = placa_tanque.group(1).strip()
 
-    data.extend([""] * 6)  # Seis casillas en blanco
+    # Número de guía (buscando "GUÍA ÚNICA" o solo número cercano a la palabra guía)
+    num_guia = re.search(r'(?:NÚMERO DE GUÍA|GUÍA|GUIA ÚNICA|GUÍ A ÚNICA|GUÍA ÚNICA|GUÍA)\s*[:\-]?\s*([0-9]{1,6})', text, re.IGNORECASE)
+    if not num_guia:
+        # Si no encuentra el patrón anterior, busca solo un número grande cerca de "166" (ejemplo)
+        num_guia = re.search(r'\b(\d{2,6})\b', text)
+    if num_guia:
+        campos["Número de Guía"] = num_guia.group(1).strip()
 
-    data.append(flexible_search(text, ["sellos", "sello"]))
+    # Empresa transportadora
+    empresa = re.search(r'EMPRESA TRANSPORTADORA\s*[:\-]?\s*([A-Z0-9\s\.]+)', text, re.IGNORECASE)
+    if empresa:
+        campos["Empresa Transportadora"] = empresa.group(1).strip()
 
-    return data
+    # Cédula
+    cedula = re.search(r'CÉDULA\s*[:\-]?\s*([0-9]{6,12})', text, re.IGNORECASE)
+    if cedula:
+        campos["Cédula"] = cedula.group(1).strip()
 
-uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
+    # Conductor
+    conductor = re.search(r'NOMBRE DEL CONDUCTOR\s*[:\-]?\s*([A-Z\s]+)', text, re.IGNORECASE)
+    if conductor:
+        campos["Conductor"] = conductor.group(1).strip()
 
-if uploaded_file:
-    st.image(uploaded_file, caption="Imagen cargada", use_container_width=True)
-    image_compressed = compress_and_resize_image(uploaded_file)
+    # Casilla en blanco 1 (solo dejamos vacía)
 
-    with st.spinner("🧠 Analizando imagen con OCR..."):
-        texto_extraido = extract_text_from_image(image_compressed)
+    # Lugar de origen
+    lugar_origen = re.search(r'LUGAR DE ORIGEN\s*[:\-]?\s*([A-Z0-9\s\.\-]+)', text, re.IGNORECASE)
+    if lugar_origen:
+        campos["Lugar de Origen"] = lugar_origen.group(1).strip()
 
-    if texto_extraido:
-        st.subheader("📝 Texto extraído (revisar):")
-        st.text_area("Texto OCR", texto_extraido, height=300)
+    # Lugar de destino
+    lugar_destino = re.search(r'LUGAR DE DESTINO\s*[:\-]?\s*([A-Z0-9\s\.\-]+)', text, re.IGNORECASE)
+    if lugar_destino:
+        campos["Lugar de Destino"] = lugar_destino.group(1).strip()
 
-        datos_extraidos = extract_fields(texto_extraido)
-
-        nombres_campos = [
-            "Fecha y Hora de Salida", "Placa Cabeza Tractora", "Placa del Tanque", "Número de Guía",
-            "Empresa Transportadora", "Cédula", "Conductor", "Casilla en blanco",
-            "Lugar de Origen", "Lugar de Destino", "Barriles Brutos", "Barriles Netos", "Barriles a 60°F",
-            "API", "BSW (%)", "Vigencia de Guía",
-            "Casilla 1", "Casilla 2", "Casilla 3", "Casilla 4", "Casilla 5", "Casilla 6",
-            "Sellos"
-        ]
-
-        df = pd.DataFrame([datos_extraidos], columns=nombres_campos)
-        st.success("✅ Datos extraídos:")
-        st.dataframe(df, use_container_width=True)
-
-        buffer_excel = io.BytesIO()
-        df.to_excel(buffer_excel, index=False)
-        buffer_excel.seek(0)
-        st.download_button("📥 Descargar Excel", data=buffer_excel, file_name="datos_guia_extraidos.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    # Barriles brutos
+    barriles_brutos = re.search(r'BARRILES BRUTOS\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    if barriles_brutos:
+        campos["Barriles Brutos"] = barriles_brutos.group(1).strip()
     else:
-        st.error("No se pudo extraer texto de la imagen.")
+        # A veces solo "BARRILES" o "VOLUMEN EN BARRILES" puede indicar brutos
+        volumen = re.search(r'VOLUMEN EN BARRILES\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+        if volumen:
+            campos["Barriles Brutos"] = volumen.group(1).strip()
+
+    # Barriles netos
+    barriles_netos = re.search(r'BARRILES NETOS\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    if barriles_netos:
+        campos["Barriles Netos"] = barriles_netos.group(1).strip()
+
+    # Barriles a 60°F
+    barriles_60 = re.search(r'BARRILES A 60°F\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    if barriles_60:
+        campos["Barriles a 60°F"] = barriles_60.group(1).strip()
+
+    # API
+    api = re.search(r'API\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    if api:
+        campos["API"] = api.group(1).strip()
+
+    # BSW (%)
+    bsw = re.search(r'BSW\s*[%]?\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    if bsw:
+        campos["BSW (%)"] = bsw.group(1).strip()
+
+    # Vigencia de la guía
+    vigencia = re.search(r'HORAS DE VIGENCIA\s*[:\-]?\s*([\d]+)', text, re.IGNORECASE)
+    if vigencia:
+        campos["Vigencia de la Guía"] = vigencia.group(1).strip() + " horas"
+
+    # Casillas en blanco 2 a 6 (dejamos vacías)
+
+    # Sellos (buscando números o códigos separados por guiones o espacios)
+    sellos = re.search(r'SELLOS?\s*[:\-]?\s*([0-9\- ]+)', text, re.IGNORECASE)
+    if sellos:
+        campos["Sellos"] = sellos.group(1).strip()
+
+    return campos
+
+def ocr_space_file(filename, api_key):
+    """Envía archivo a OCR.space y devuelve texto extraído"""
+    with open(filename, 'rb') as f:
+        payload = {
+            'apikey': api_key,
+            'language': 'spa',
+            'isOverlayRequired': False,
+        }
+        files = {'file': (filename, f)}
+        r = requests.post('https://api.ocr.space/parse/image', data=payload, files=files)
+    result = r.json()
+    if result.get("IsErroredOnProcessing"):
+        raise Exception(f"Error en OCR.space: {result.get('ErrorMessage')}")
+    parsed_results = result.get("ParsedResults")
+    if parsed_results:
+        return parsed_results[0].get("ParsedText", "")
+    return ""
+
+def main():
+    st.title("OCR para Guías de Transporte de Crudo - Extracción de Datos")
+
+    uploaded_file = st.file_uploader("Sube una imagen o PDF de la guía", type=["png", "jpg", "jpeg", "pdf"])
+
+    if uploaded_file:
+        # Guardar archivo temporal para enviarlo a OCR.space
+        with open("temp_upload", "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        try:
+            texto = ocr_space_file("temp_upload", api_key)
+            st.text_area("Texto extraído por OCR:", texto, height=300)
+
+            datos = extract_fields(texto)
+
+            st.write("Datos extraídos:")
+            df = pd.DataFrame(list(datos.items()), columns=["Campo", "Valor"])
+            st.dataframe(df)
+
+            # Exportar a Excel
+            towrite = BytesIO()
+            df.to_excel(towrite, index=False, sheet_name="Datos")
+            towrite.seek(0)
+            st.download_button(
+                label="Descargar Excel",
+                data=towrite,
+                file_name="datos_guia.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+if __name__ == "__main__":
+    main()
