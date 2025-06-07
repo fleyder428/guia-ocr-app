@@ -1,36 +1,20 @@
 import streamlit as st
-import pandas as pd
-from utils import extraer_datos_clave
 from PIL import Image
-import io
+import pytesseract
 
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
 st.title("📄 Extracción Inteligente de Guías - OCR")
 
-uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
+archivo_subido = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
 
-if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Imagen cargada", use_column_width=True)
+if archivo_subido:
+    imagen = Image.open(archivo_subido)
+    st.image(imagen, caption="Imagen cargada", use_column_width=True)
 
-    if st.button("🔍 Extraer datos"):
+    if st.button("🔍 Extraer texto OCR"):
         with st.spinner("Procesando imagen..."):
-            datos = extraer_datos_clave(image)
-
-            # Mostrar resultados
-            df = pd.DataFrame([datos])
-            st.success("✅ Datos extraídos:")
-            st.dataframe(df)
-
-            # Exportar a Excel
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name="Guía")
-            output.seek(0)
-
-            st.download_button(
-                label="⬇️ Descargar Excel",
-                data=output,
-                file_name="guia_extraida.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            try:
+                texto = pytesseract.image_to_string(imagen, lang='spa')
+                st.text_area("Texto OCR detectado:", texto, height=300)
+            except Exception as e:
+                st.error(f"No se pudo procesar la imagen OCR: {e}")
