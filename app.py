@@ -2,19 +2,47 @@ import streamlit as st
 import requests
 import pandas as pd
 import re
+from PIL import Image
 from io import BytesIO
 
-# Función para usar OCR.space
+# --- Comprime imágenes al vuelo ---
+def comprimir_imagen(image_file, max_size_kb=1000):
+    imagen = Image.open(image_file)
+    output = BytesIO()
+
+    # Redimensionar si es muy grande (ancho máximo 1024 px)
+    max_ancho = 1024
+    if imagen.width > max_ancho:
+        ratio = max_ancho / float(imagen.width)
+        nuevo_alto = int((float(imagen.height) * float(ratio)))
+        imagen = imagen.resize((max_ancho, nuevo_alto))
+
+    # Guardar como JPEG optimizado
+    imagen = imagen.convert("RGB")  # Para asegurar compatibilidad JPEG
+    calidad = 85  # Puedes ajustar esto (85 es buena compresión sin perder mucho detalle)
+
+    imagen.save(output, format="JPEG", optimize=True, quality=calidad)
+    output.seek(0)
+    return output
+
+# --- Función OCR.space con compresión integrada ---
 def ocr_space_file(uploaded_file, api_key='K84668714088957', language='spa'):
-    url_api = 'https://api.ocr.space/parse/image'
+    # Comprimir si es imagen
+    if uploaded_file.type.startswith("image/"):
+        archivo_procesado = comprimir_imagen(uploaded_file)
+        filename = "comprimido.jpg"
+    else:
+        archivo_procesado = uploaded_file
+        filename = uploaded_file.name
+
     result = requests.post(
-        url_api,
-        files={'filename': uploaded_file},
+        'https://api.ocr.space/parse/image',
+        files={'filename': (filename, archivo_procesado)},
         data={'apikey': api_key, 'language': language},
     )
     return result.json()
 
-# Función para extraer los campos del texto OCR
+# --- Función para extraer los campos del texto OCR ---
 def extraer_datos_guia(texto):
     def buscar(patron):
         match = re.search(patron, texto, re.IGNORECASE)
@@ -46,48 +74,43 @@ def extraer_datos_guia(texto):
     }
     return datos
 
-# INTERFAZ STREAMLIT
+# --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Extractor de Guías - OCR", layout="centered")
 st.title("📦 Extracción de Guías con OCR.space")
 
 uploaded_file = st.file_uploader("Sube una imagen o PDF escaneado de la guía", type=["jpg", "jpeg", "png", "pdf"])
 
-# Prueba manual con texto
-st.subheader("✍️ O ingresa manualmente el texto OCR (para pruebas):")
-input_text = st.text_area("Pega aquí el texto OCR si ya lo tienes", height=300)
+# Entrada de texto manual opcional
+st.subheader("✍️ O pega aquí texto OCR manual (para pruebas):")
+input_text = st.text_area("Texto OCR", height=300)
 
-# BOTÓN para ejecutar OCR o procesar texto
+# BOTÓN de procesamiento
 if st.button("🔍 Procesar"):
     texto = ""
 
-    # Si hay imagen, la procesamos con OCR
     if uploaded_file:
-        st.info("⏳ Analizando con OCR.space...")
+        st.info("⏳ Enviando a OCR.space con compresión automática...")
         result = ocr_space_file(uploaded_file)
-
-        # DEBUG opcional: mostrar respuesta completa
         st.write("🧪 Resultado crudo del OCR:", result)
 
         try:
             texto = result['ParsedResults'][0]['ParsedText']
         except (KeyError, IndexError):
-            st.error("❌ No se pudo leer texto OCR. Verifica que la imagen esté clara.")
+            st.error("❌ No se pudo leer texto OCR. Verifica la imagen.")
     elif input_text.strip():
         texto = input_text.strip()
     else:
-        st.warning("⚠️ Debes subir una imagen o pegar texto OCR manualmente.")
+        st.warning("⚠️ Debes subir una imagen o pegar texto OCR.")
 
     if texto:
         st.success("✅ Texto OCR recibido correctamente.")
         st.text_area("📄 Texto detectado por OCR", value=texto, height=250)
 
-        # Extraer campos
         datos = extraer_datos_guia(texto)
         df = pd.DataFrame([datos])
         st.subheader("📋 Datos extraídos:")
         st.dataframe(df)
 
-        # Descargar como Excel
         output = BytesIO()
         df.to_excel(output, index=False)
         st.download_button("⬇️ Descargar Excel", data=output.getvalue(), file_name="datos_guia.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
