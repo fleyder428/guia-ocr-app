@@ -1,10 +1,10 @@
 import streamlit as st
 from PIL import Image
-import requests
 import io
-import pandas as pd
+import requests
+from utils import extraer_datos_clave, generar_excel
 
-API_KEY = "K84668714088957"  # Tu clave API OCR.space
+API_KEY = "K84668714088957"  # Tu API Key OCR.space
 
 def ocr_space_api(imagen_bytes):
     url_api = "https://api.ocr.space/parse/image"
@@ -30,27 +30,29 @@ archivo_subido = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg
 
 if archivo_subido:
     imagen = Image.open(archivo_subido)
-    st.image(imagen, caption="Imagen cargada", use_container_width=True)
+    st.image(imagen, caption="Imagen cargada", use_column_width=True)
 
-    if st.button("🔍 Extraer texto OCR"):
+    if st.button("🔍 Extraer datos y generar Excel"):
         with st.spinner("Procesando imagen con OCR.space..."):
             try:
                 buf = io.BytesIO()
-
-                # Comprimir imagen para que pese menos de 1MB
-                calidad = 30
-                imagen.save(buf, format='JPEG', quality=calidad)
-
-                while buf.getbuffer().nbytes > 1024 * 1024 and calidad > 10:
-                    buf.seek(0)
-                    buf.truncate()
-                    calidad -= 5
-                    imagen.save(buf, format='JPEG', quality=calidad)
-
+                imagen.save(buf, format='JPEG')
                 bytes_imagen = buf.getvalue()
 
                 texto_ocr = ocr_space_api(bytes_imagen)
-                st.text_area("Texto OCR detectado:", texto_ocr, height=300)
+                datos = extraer_datos_clave(texto_ocr)
+
+                st.success("✅ Datos extraídos:")
+                st.dataframe([datos])
+
+                excel_bytes = generar_excel(datos)
+
+                st.download_button(
+                    label="⬇️ Descargar Excel",
+                    data=excel_bytes,
+                    file_name="guia_extraida.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
             except Exception as e:
                 st.error(f"No se pudo procesar la imagen OCR: {e}")
