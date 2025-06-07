@@ -4,33 +4,61 @@ import re
 import pandas as pd
 from io import BytesIO
 
-# Tu API Key de OCR.space, reemplaza aquí o usa st.secrets
-api_key = "K84668714088957"
+API_KEY = "tu_api_key_aqui"
+
+def ocr_space_file_bytes(file_bytes, filename, api_key):
+    payload = {
+        'apikey': api_key,
+        'language': 'spa',
+        'isOverlayRequired': False,
+    }
+    files = {'file': (filename, file_bytes)}
+    r = requests.post('https://api.ocr.space/parse/image', data=payload, files=files)
+    result = r.json()
+    if result.get("IsErroredOnProcessing"):
+        raise Exception(f"Error en OCR.space: {result.get('ErrorMessage')}")
+    parsed_results = result.get("ParsedResults")
+    if parsed_results:
+        return parsed_results[0].get("ParsedText", "")
+    return ""
 
 def normalize_text(text):
-    # Correcciones comunes de errores OCR, usando re.escape para evitar errores de regex
+    # Reemplazos comunes para corregir errores de OCR en español y formatos específicos
     replacements = {
-        "LUCAR": "LUGAR",
-        "GIJíA": "GUÍA",
-        "TECPETROL": "TEC PETROL",
-        "PETROLEL$*Á": "PETRÓLEO",
-        "PETROLEEM": "PETRÓLEO",
-        "CÉDU": "CÉDULA",
-        "ESTAC$b'4": "ESTACIÓN",
-        "R773fi1": "R77361",
-        "VOLUMEN EN BARRILES": "VOLUMEN EN BARRILES",
-        "EARR\\LES": "BARRILES",
-        "ANÁLISIS OE LABORATOPd9J530f_": "ANÁLISIS DE LABORATORIO",
+        r"PLANT[OA]": "PLANTA",
+        r"LUCAR": "LUGAR",
+        r"LUCAR DE ORIGEN": "LUGAR DE ORIGEN",
+        r"LUCAR DE DESTINO": "LUGAR DE DESTINO",
+        r"PETROLEI]M": "PETROLEO",
+        r"PETROLEL\$*\*Á": "PETROLEO",
+        r"GUILLERMO GRANAnos": "GUILLERMO GRANADOS",
+        r"PLACAS DEL CABEZOTE": "PLACAS DEL CABEZA TRACTORA",
+        r"BARRILES BRUTOS": "BARRILES BRUTOS",
+        r"BARRILES NETOS": "BARRILES NETOS",
+        r"BARRILES A 60°F": "BARRILES A 60°F",
+        r"VOLUMEN EN SARRLES": "VOLUMEN EN BARRILES",
+        r"TS CASANARE SAS": "TS CASANARE SAS",
+        r"CPF PENOARE": "CPF PENDARE",
+        r"ESTAC\$b'4 VASCONIA": "ESTACION VASCONIA",
+        r"ANÁLISIS DE LABORATORIO": "ANÁLISIS DE LABORATORIO",
+        r"FACTURA O REMISIÓN NO": "FACTURA O REMISIÓN NO",
+        r"CÉDU": "CÉDULA",
+        r"DE DESTINO": "LUGAR DE DESTINO",
+        r"DE ORIGEN": "LUGAR DE ORIGEN",
+        r"\s+": " ",  # espacios multiples a uno solo
     }
+    # Aplica todos los reemplazos
     for wrong, right in replacements.items():
-        text = re.sub(re.escape(wrong), right, text, flags=re.IGNORECASE)
+        text = re.sub(wrong, right, text, flags=re.IGNORECASE)
+    # Quitar caracteres no ASCII que suelen fallar
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)
+    text = text.strip()
     return text
 
 def extract_fields(text):
     text = normalize_text(text)
 
-    # Inicializar diccionario con las claves y valores vacíos para mantener el orden
-    campos = {
+    datos = {
         "Fecha y Hora de Salida": "",
         "Placa del Cabeza Tractora": "",
         "Placa del Tanque": "",
@@ -46,162 +74,151 @@ def extract_fields(text):
         "Barriles a 60°F": "",
         "API": "",
         "BSW (%)": "",
-        "Vigencia de la Guía": "",
+        "Vigencia de Guía": "",
         "Casilla en Blanco 2": "",
         "Casilla en Blanco 3": "",
         "Casilla en Blanco 4": "",
         "Casilla en Blanco 5": "",
         "Casilla en Blanco 6": "",
-        "Sellos": ""
+        "Casilla en Blanco 7": "",
+        "Sellos": "",
     }
 
-    # Buscar con regex cada campo clave basado en posibles patrones comunes
-
-    # Fecha y hora de salida (buscando una fecha en formato dd/mm/yyyy o similar)
-    fecha_salida = re.search(r'FECHA Y HORA DE SALIDA\s*[:\-]?\s*([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4}(?:\s*-\s*[0-9]{1,2}:[0-9]{2}(?:\s*[APMapm]{2})?)?)', text, re.IGNORECASE)
-    if fecha_salida:
-        campos["Fecha y Hora de Salida"] = fecha_salida.group(1).strip()
-
-    # Placa del cabeza tractora
-    placa_cabeza = re.search(r'PLACAS DEL CABEZOTE\s*[:\-]?\s*([A-Z0-9\-]+)', text, re.IGNORECASE)
-    if placa_cabeza:
-        campos["Placa del Cabeza Tractora"] = placa_cabeza.group(1).strip()
-
-    # Placa del tanque
-    placa_tanque = re.search(r'PLACAS DEL TANQUE\s*[:\-]?\s*([A-Z0-9\-]+)', text, re.IGNORECASE)
-    if placa_tanque:
-        campos["Placa del Tanque"] = placa_tanque.group(1).strip()
-
-    # Número de guía (buscando "GUÍA ÚNICA" o solo número cercano a la palabra guía)
-    num_guia = re.search(r'(?:NÚMERO DE GUÍA|GUÍA|GUIA ÚNICA|GUÍ A ÚNICA|GUÍA ÚNICA|GUÍA)\s*[:\-]?\s*([0-9]{1,6})', text, re.IGNORECASE)
-    if not num_guia:
-        # Si no encuentra el patrón anterior, busca solo un número grande cerca de "166" (ejemplo)
-        num_guia = re.search(r'\b(\d{2,6})\b', text)
-    if num_guia:
-        campos["Número de Guía"] = num_guia.group(1).strip()
-
-    # Empresa transportadora
-    empresa = re.search(r'EMPRESA TRANSPORTADORA\s*[:\-]?\s*([A-Z0-9\s\.]+)', text, re.IGNORECASE)
-    if empresa:
-        campos["Empresa Transportadora"] = empresa.group(1).strip()
-
-    # Cédula
-    cedula = re.search(r'CÉDULA\s*[:\-]?\s*([0-9]{6,12})', text, re.IGNORECASE)
-    if cedula:
-        campos["Cédula"] = cedula.group(1).strip()
-
-    # Conductor
-    conductor = re.search(r'NOMBRE DEL CONDUCTOR\s*[:\-]?\s*([A-Z\s]+)', text, re.IGNORECASE)
-    if conductor:
-        campos["Conductor"] = conductor.group(1).strip()
-
-    # Casilla en blanco 1 (solo dejamos vacía)
-
-    # Lugar de origen
-    lugar_origen = re.search(r'LUGAR DE ORIGEN\s*[:\-]?\s*([A-Z0-9\s\.\-]+)', text, re.IGNORECASE)
-    if lugar_origen:
-        campos["Lugar de Origen"] = lugar_origen.group(1).strip()
-
-    # Lugar de destino
-    lugar_destino = re.search(r'LUGAR DE DESTINO\s*[:\-]?\s*([A-Z0-9\s\.\-]+)', text, re.IGNORECASE)
-    if lugar_destino:
-        campos["Lugar de Destino"] = lugar_destino.group(1).strip()
-
-    # Barriles brutos
-    barriles_brutos = re.search(r'BARRILES BRUTOS\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
-    if barriles_brutos:
-        campos["Barriles Brutos"] = barriles_brutos.group(1).strip()
+    # FECHA Y HORA DE SALIDA: busca fechas en varios formatos dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd y hora
+    fecha_hora = re.search(
+        r"FECHA Y HORA DE SALIDA\s*[:\-]?\s*([\d]{1,2}[\/\-][\d]{1,2}[\/\-][\d]{2,4}(?:\s+[\d]{1,2}[:h][\d]{2}(?:[:][\d]{2})?\s*[APMapm\.]{0,4})?)", text)
+    if fecha_hora:
+        datos["Fecha y Hora de Salida"] = fecha_hora.group(1).strip()
     else:
-        # A veces solo "BARRILES" o "VOLUMEN EN BARRILES" puede indicar brutos
-        volumen = re.search(r'VOLUMEN EN BARRILES\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
-        if volumen:
-            campos["Barriles Brutos"] = volumen.group(1).strip()
+        # Alternativa: solo fecha y hora en líneas cercanas
+        alt_fecha = re.search(r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", text)
+        alt_hora = re.search(r"(\d{1,2}[:h]\d{2}(?::\d{2})?\s*[APMapm\.]{0,4})", text)
+        if alt_fecha:
+            datos["Fecha y Hora de Salida"] = alt_fecha.group(1)
+            if alt_hora:
+                datos["Fecha y Hora de Salida"] += " " + alt_hora.group(1)
 
-    # Barriles netos
-    barriles_netos = re.search(r'BARRILES NETOS\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    # PLACA DEL CABEZA TRACTORA: patrón flexible, mayúsculas, números, guiones
+    placa_ct = re.search(r"PLACAS DEL CABEZA TRACTORA\s*[:\-]?\s*([A-Z0-9\-]{4,10})", text)
+    if placa_ct:
+        datos["Placa del Cabeza Tractora"] = placa_ct.group(1).strip()
+
+    # PLACA DEL TANQUE
+    placa_tanque = re.search(r"PLACAS DEL TANQUE\s*[:\-]?\s*([A-Z0-9\-]{4,10})", text)
+    if placa_tanque:
+        datos["Placa del Tanque"] = placa_tanque.group(1).strip()
+
+    # NÚMERO DE GUÍA - busca números cercanos a "GUÍA"
+    num_guia = re.search(r"GUÍA.*?(\d{3,10})", text, re.IGNORECASE)
+    if num_guia:
+        datos["Número de Guía"] = num_guia.group(1).strip()
+
+    # EMPRESA TRANSPORTADORA: letras y espacios
+    empresa = re.search(r"EMPRESA TRANSPORTADORA\s*[:\-]?\s*([A-Z0-9\s\.]+)", text)
+    if empresa:
+        datos["Empresa Transportadora"] = empresa.group(1).strip()
+
+    # CÉDULA (números con puntos o sin)
+    cedula = re.search(r"CÉDULA\s*[:\-]?\s*([\d\.]+)", text)
+    if cedula:
+        datos["Cédula"] = cedula.group(1).strip()
+
+    # CONDUCTOR - letras y espacios
+    conductor = re.search(r"NOMBRE DEL CONDUCTOR\s*[:\-]?\s*([A-ZÁÉÍÓÚÑ\s]+)", text)
+    if conductor:
+        datos["Conductor"] = conductor.group(1).strip()
+
+    # Casilla en blanco 1 (vacío)
+    datos["Casilla en Blanco 1"] = ""
+
+    # LUGAR DE ORIGEN
+    origen = re.search(r"LUGAR DE ORIGEN\s*[:\-]?\s*([A-Z0-9\s\.,\-]+)", text)
+    if origen:
+        datos["Lugar de Origen"] = origen.group(1).strip()
+
+    # LUGAR DE DESTINO
+    destino = re.search(r"LUGAR DE DESTINO\s*[:\-]?\s*([A-Z0-9\s\.,\-]+)", text)
+    if destino:
+        datos["Lugar de Destino"] = destino.group(1).strip()
+
+    # BARRILES BRUTOS
+    barriles_brutos = re.search(r"BARRILES BRUTOS\s*[:\-]?\s*([\d,\.]+)", text, re.IGNORECASE)
+    if barriles_brutos:
+        datos["Barriles Brutos"] = barriles_brutos.group(1).replace(",", ".").strip()
+
+    # BARRILES NETOS
+    barriles_netos = re.search(r"BARRILES NETOS\s*[:\-]?\s*([\d,\.]+)", text, re.IGNORECASE)
     if barriles_netos:
-        campos["Barriles Netos"] = barriles_netos.group(1).strip()
+        datos["Barriles Netos"] = barriles_netos.group(1).replace(",", ".").strip()
 
-    # Barriles a 60°F
-    barriles_60 = re.search(r'BARRILES A 60°F\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    # BARRILES A 60°F
+    barriles_60 = re.search(r"BARRILES A 60°F\s*[:\-]?\s*([\d,\.]+)", text, re.IGNORECASE)
     if barriles_60:
-        campos["Barriles a 60°F"] = barriles_60.group(1).strip()
+        datos["Barriles a 60°F"] = barriles_60.group(1).replace(",", ".").strip()
 
     # API
-    api = re.search(r'API\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    api = re.search(r"API\s*[:\-]?\s*([\d,\.]+)", text, re.IGNORECASE)
     if api:
-        campos["API"] = api.group(1).strip()
+        datos["API"] = api.group(1).replace(",", ".").strip()
 
     # BSW (%)
-    bsw = re.search(r'BSW\s*[%]?\s*[:\-]?\s*([\d\.,]+)', text, re.IGNORECASE)
+    bsw = re.search(r"BSW\s*%?\s*[:\-]?\s*([\d,\.]+)", text, re.IGNORECASE)
     if bsw:
-        campos["BSW (%)"] = bsw.group(1).strip()
+        datos["BSW (%)"] = bsw.group(1).replace(",", ".").strip()
 
-    # Vigencia de la guía
-    vigencia = re.search(r'HORAS DE VIGENCIA\s*[:\-]?\s*([\d]+)', text, re.IGNORECASE)
+    # VIGENCIA DE GUÍA (horas)
+    vigencia = re.search(r"HORAS DE VIGENCIA\s*[:\-]?\s*(\d+)", text, re.IGNORECASE)
     if vigencia:
-        campos["Vigencia de la Guía"] = vigencia.group(1).strip() + " horas"
+        datos["Vigencia de Guía"] = vigencia.group(1).strip()
 
-    # Casillas en blanco 2 a 6 (dejamos vacías)
+    # Casillas en blanco 2 a 7 (vacías)
+    for i in range(2, 8):
+        datos[f"Casilla en Blanco {i}"] = ""
 
-    # Sellos (buscando números o códigos separados por guiones o espacios)
-    sellos = re.search(r'SELLOS?\s*[:\-]?\s*([0-9\- ]+)', text, re.IGNORECASE)
+    # SELLOS
+    sellos = re.search(r"SELLOS\s*[:\-]?\s*([A-Z0-9\s\-]+)", text)
     if sellos:
-        campos["Sellos"] = sellos.group(1).strip()
+        datos["Sellos"] = sellos.group(1).strip()
 
-    return campos
-
-def ocr_space_file(filename, api_key):
-    """Envía archivo a OCR.space y devuelve texto extraído"""
-    with open(filename, 'rb') as f:
-        payload = {
-            'apikey': api_key,
-            'language': 'spa',
-            'isOverlayRequired': False,
-        }
-        files = {'file': (filename, f)}
-        r = requests.post('https://api.ocr.space/parse/image', data=payload, files=files)
-    result = r.json()
-    if result.get("IsErroredOnProcessing"):
-        raise Exception(f"Error en OCR.space: {result.get('ErrorMessage')}")
-    parsed_results = result.get("ParsedResults")
-    if parsed_results:
-        return parsed_results[0].get("ParsedText", "")
-    return ""
+    return datos
 
 def main():
-    st.title("OCR para Guías de Transporte de Crudo - Extracción de Datos")
+    st.title("Extracción OCR y Exportación a Excel - Guías de Transporte")
 
-    uploaded_file = st.file_uploader("Sube una imagen o PDF de la guía", type=["png", "jpg", "jpeg", "pdf"])
-
-    if uploaded_file:
-        # Guardar archivo temporal para enviarlo a OCR.space
-        with open("temp_upload", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-
+    uploaded_file = st.file_uploader("Sube la imagen o PDF de la guía", type=["jpg", "jpeg", "png", "pdf"])
+    if uploaded_file is not None:
         try:
-            texto = ocr_space_file("temp_upload", api_key)
-            st.text_area("Texto extraído por OCR:", texto, height=300)
+            # Leer bytes
+            file_bytes = uploaded_file.read()
+            filename = uploaded_file.name
 
-            datos = extract_fields(texto)
+            with st.spinner("Procesando OCR..."):
+                texto_extraido = ocr_space_file_bytes(file_bytes, filename, API_KEY)
 
-            st.write("Datos extraídos:")
-            df = pd.DataFrame(list(datos.items()), columns=["Campo", "Valor"])
+            st.subheader("Texto extraído (normalizado):")
+            st.text_area("", normalize_text(texto_extraido), height=300)
+
+            datos_extraidos = extract_fields(texto_extraido)
+            df = pd.DataFrame([datos_extraidos])
+
+            st.subheader("Datos extraídos:")
             st.dataframe(df)
 
-            # Exportar a Excel
-            towrite = BytesIO()
-            df.to_excel(towrite, index=False, sheet_name="Datos")
-            towrite.seek(0)
+            # Botón para descargar Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Datos')
+                writer.save()
+            output.seek(0)
+
             st.download_button(
-                label="Descargar Excel",
-                data=towrite,
+                label="Descargar datos en Excel",
+                data=output,
                 file_name="datos_guia.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
