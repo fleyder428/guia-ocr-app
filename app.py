@@ -1,11 +1,23 @@
 import streamlit as st
 from PIL import Image
-import io
 import requests
-from utils import extraer_datos_clave, generar_excel
+import io
+import pandas as pd
 
-API_KEY = "K84668714088957"  # Tu API Key OCR.space
+API_KEY = "K84668714088957"  # Tu clave API OCR.space
 
+# Comprime la imagen si es muy grande
+def comprimir_imagen(imagen, max_width=1000):
+    ancho, alto = imagen.size
+    if ancho > max_width:
+        ratio = max_width / ancho
+        nuevo_alto = int(alto * ratio)
+        imagen = imagen.resize((max_width, nuevo_alto), Image.ANTIALIAS)
+    buffer = io.BytesIO()
+    imagen.save(buffer, format="JPEG", quality=70)
+    return buffer.getvalue()
+
+# Llama a la API de OCR.space
 def ocr_space_api(imagen_bytes):
     url_api = "https://api.ocr.space/parse/image"
     archivos = {
@@ -23,6 +35,7 @@ def ocr_space_api(imagen_bytes):
     texto = resultado['ParsedResults'][0]['ParsedText']
     return texto
 
+# Interfaz de Streamlit
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
 st.title("📄 Extracción Inteligente de Guías - OCR")
 
@@ -32,24 +45,24 @@ if archivo_subido:
     imagen = Image.open(archivo_subido)
     st.image(imagen, caption="Imagen cargada", use_column_width=True)
 
-    if st.button("🔍 Extraer datos y generar Excel"):
+    if st.button("🔍 Extraer texto OCR"):
         with st.spinner("Procesando imagen con OCR.space..."):
             try:
-                buf = io.BytesIO()
-                imagen.save(buf, format='JPEG')
-                bytes_imagen = buf.getvalue()
+                imagen_bytes = comprimir_imagen(imagen)
+                texto_ocr = ocr_space_api(imagen_bytes)
+                st.text_area("📝 Texto OCR detectado:", texto_ocr, height=300)
 
-                texto_ocr = ocr_space_api(bytes_imagen)
-                datos = extraer_datos_clave(texto_ocr)
-
-                st.success("✅ Datos extraídos:")
-                st.dataframe([datos])
-
-                excel_bytes = generar_excel(datos)
+                # Guardar en Excel
+                datos = {"Texto extraído": texto_ocr.replace("\n", " ")}
+                df = pd.DataFrame([datos])
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name="Guía")
+                output.seek(0)
 
                 st.download_button(
                     label="⬇️ Descargar Excel",
-                    data=excel_bytes,
+                    data=output,
                     file_name="guia_extraida.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
