@@ -3,7 +3,7 @@ import requests
 import re
 import pandas as pd
 
-OCR_SPACE_API_KEY = "TU_API_KEY_AQUI"  # Pon aquí tu API key de OCR.space
+OCR_SPACE_API_KEY = "TU_API_KEY_AQUI"  # Cambia aquí tu API Key
 
 def ocr_space_file(file):
     """Enviar imagen a OCR.space y devolver texto extraído."""
@@ -16,10 +16,23 @@ def ocr_space_file(file):
     response = requests.post('https://api.ocr.space/parse/image',
                              data=payload,
                              files=files)
-    result = response.json()
-    if result.get("IsErroredOnProcessing"):
-        raise Exception("Error en OCR.space: " + ", ".join(result.get("ErrorMessage", [])))
-    return result["ParsedResults"][0]["ParsedText"]
+    try:
+        result = response.json()
+    except Exception as e:
+        raise Exception("No se pudo interpretar la respuesta de OCR.space como JSON.") from e
+    
+    if not isinstance(result, dict):
+        raise Exception("Respuesta inesperada de OCR.space, no es un objeto JSON.")
+
+    if result.get("IsErroredOnProcessing", True):
+        errors = result.get("ErrorMessage", ["Error desconocido en OCR.space"])
+        raise Exception("Error en OCR.space: " + "; ".join(errors))
+    
+    parsed_results = result.get("ParsedResults")
+    if not parsed_results or len(parsed_results) == 0:
+        raise Exception("No se encontraron resultados parseados en OCR.space.")
+    
+    return parsed_results[0].get("ParsedText", "")
 
 def normalize_text(text):
     replacements = {
@@ -29,7 +42,7 @@ def normalize_text(text):
         r'[ÓÒÔÖ]': 'O',
         r'[ÚÙÛÜ]': 'U',
         r'Ñ': 'N',
-        r'[^A-Z0-9\s\.,:/\-]': ' ',  # Dejar letras, números y algunos signos
+        r'[^A-Z0-9\s\.,:/\-]': ' ',  # Letras, números y signos comunes
     }
     text = text.upper()
     for wrong, right in replacements.items():
