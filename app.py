@@ -26,51 +26,54 @@ def ocr_space_api(imagen_bytes):
     return texto
 
 def extraer_datos_clave(texto):
-    def buscar(patron):
-        match = re.search(patron, texto, re.IGNORECASE)
+    # Aquí un patrón más flexible para encontrar valor después de la etiqueta:
+    def buscar(patron, texto=texto):
+        # Busca la etiqueta seguido de cualquier cantidad de espacios, tabulaciones, saltos de línea, y luego captura el valor hasta salto de línea o fin de línea
+        regex = re.compile(patron, re.IGNORECASE | re.DOTALL)
+        match = regex.search(texto)
         if match:
-            valor = match.group(1).strip()
+            valor = match.group(1)
+            valor = valor.strip()
+            # Quitar saltos de línea internos si hay
             valor = re.sub(r"[\n\r\t]+", " ", valor)
             return valor
         return ""
 
     datos = {
-        "Fecha y hora de salida": buscar(r"Fecha y Hora de Salida\s*[:\t]*([\d/]+(?: -? ?\d{1,2}:\d{2} [APMapm]{2})?)"),
-        "Placa del cabeza tractora": buscar(r"Placa del Cabeza Tractora\s*[:\t]*([A-Z0-9\-]+)"),
-        "Placa del tanque": buscar(r"Placa del Tanque\s*[:\t]*([A-Z0-9\-]+)"),
-        "Número de guía": buscar(r"Número de Guía\s*[:\t]*([A-Z0-9\-]+)"),
-        "Empresa transportadora": buscar(r"Empresa Transportadora\s*[:\t]*(.+)"),
-        "Cédula": buscar(r"Cédula\s*[:\t]*([0-9]+)"),
-        "Conductor": buscar(r"Conductor\s*[:\t]*([A-ZÑÁÉÍÓÚa-zñáéíóú ]+)"),
+        "Fecha y hora de salida": buscar(r"Fecha\s*y\s*Hora\s*de\s*Salida\s*[:\t]*\s*([\d/:\-\sAPMapm]+)"),
+        "Placa del cabeza tractora": buscar(r"Placa\s*del\s*Cabeza\s*Tractora\s*[:\t]*\s*([A-Z0-9\-]+)"),
+        "Placa del tanque": buscar(r"Placa\s*del\s*Tanque\s*[:\t]*\s*([A-Z0-9\-]+)"),
+        "Número de guía": buscar(r"Número\s*de\s*Guía\s*[:\t]*\s*([A-Z0-9\-]+)"),
+        "Empresa transportadora": buscar(r"Empresa\s*Transportadora\s*[:\t]*\s*([\w\s\.]+)"),
+        "Cédula": buscar(r"Cédula\s*[:\t]*\s*([0-9]+)"),
+        "Conductor": buscar(r"Conductor\s*[:\t]*\s*([A-ZÑÁÉÍÓÚa-zñáéíóú\s]+)"),
         "Casilla en blanco 1": "",
-        "Lugar de origen": buscar(r"Lugar de Origen\s*[:\t]*(.+)"),
-        "Lugar de destino": buscar(r"Lugar de Destino\s*[:\t]*(.+)"),
-        "Barriles brutos": buscar(r"Barriles Brutos\s*[:\t]*([\d.,]+)"),
-        "Barriles netos": buscar(r"Barriles Netos\s*[:\t]*([\d.,]+)"),
-        "Barriles a 60°F": buscar(r"Barriles a 60°F\s*[:\t]*([\d.,]+)"),
-        "API": buscar(r"API\s*[:\t]*([\d.,]+)"),
-        "BSW (%)": buscar(r"BSW\s*\(%\)?\s*[:\t]*([\d.,]+)"),
-        "Vigencia de guía": buscar(r"Vigencia de la Guía\s*[:\t]*([\d]+) horas"),
+        "Lugar de origen": buscar(r"Lugar\s*de\s*Origen\s*[:\t]*\s*([\w\s\.]+)"),
+        "Lugar de destino": buscar(r"Lugar\s*de\s*Destino\s*[:\t]*\s*([\w\s\.]+)"),
+        "Barriles brutos": buscar(r"Barriles\s*Brutos\s*[:\t]*\s*([\d.,]+)"),
+        "Barriles netos": buscar(r"Barriles\s*Netos\s*[:\t]*\s*([\d.,]+)"),
+        "Barriles a 60°F": buscar(r"Barriles\s*a\s*60°F\s*[:\t]*\s*([\d.,]+)"),
+        "API": buscar(r"API\s*[:\t]*\s*([\d.,]+)"),
+        "BSW (%)": buscar(r"BSW\s*(?:\(%\))?\s*[:\t]*\s*([\d.,]+)"),
+        "Vigencia de guía": buscar(r"Vigencia\s*de\s*la\s*Guía\s*[:\t]*\s*([\d]+)\s*horas"),
         "Casilla en blanco 2": "",
         "Casilla en blanco 3": "",
         "Casilla en blanco 4": "",
         "Casilla en blanco 5": "",
         "Casilla en blanco 6": "",
         "Casilla en blanco 7": "",
-        "Sellos": buscar(r"Sellos\s*[:\t]*(.+)")
+        "Sellos": buscar(r"Sellos\s*[:\t]*\s*(.+)")
     }
     return datos
 
 st.set_page_config(page_title="Extractor de Guías", layout="centered")
 st.title("📄 Extracción Inteligente de Guías - OCR")
 
-# --- Subida de imagen y OCR ---
 archivo_subido = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
 
 if archivo_subido:
     imagen = Image.open(archivo_subido)
 
-    # Reducir tamaño si > 500 KB para evitar errores
     buf_original = io.BytesIO()
     imagen.save(buf_original, format='JPEG', quality=50, optimize=True)
     imagen_bytes = buf_original.getvalue()
@@ -91,7 +94,14 @@ if archivo_subido:
         with st.spinner("Procesando con OCR.space..."):
             try:
                 texto_ocr = ocr_space_api(imagen_bytes)
+                st.subheader("Texto OCR completo:")
+                st.text_area("Texto completo extraído:", texto_ocr, height=300)
+
                 datos = extraer_datos_clave(texto_ocr)
+
+                st.subheader("Datos extraídos (prueba de búsqueda):")
+                for k, v in datos.items():
+                    st.write(f"**{k}:** {v if v else '[No encontrado]'}")
 
                 columnas_ordenadas = [
                     "Fecha y hora de salida",
@@ -139,7 +149,6 @@ if archivo_subido:
             except Exception as e:
                 st.error(f"Error al procesar OCR: {e}")
 
-# --- Opción para pegar texto OCR manualmente ---
 st.markdown("---")
 st.subheader("Opción 2: Pegar texto OCR directamente")
 
@@ -151,7 +160,14 @@ texto_ocr_manual = st.text_area(
 if st.button("🔍 Extraer datos del texto OCR pegado", key="extraer_texto"):
     if texto_ocr_manual.strip():
         try:
+            st.subheader("Texto OCR pegado:")
+            st.text_area("Texto completo:", texto_ocr_manual, height=300)
+
             datos = extraer_datos_clave(texto_ocr_manual)
+
+            st.subheader("Datos extraídos (prueba de búsqueda):")
+            for k, v in datos.items():
+                st.write(f"**{k}:** {v if v else '[No encontrado]'}")
 
             columnas_ordenadas = [
                 "Fecha y hora de salida",
