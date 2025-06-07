@@ -2,100 +2,128 @@ import streamlit as st
 import requests
 from PIL import Image
 import io
-import re
+import os
+from datetime import datetime
 import pandas as pd
 
-api_key = "K84668714088957"  # Pon aquí tu API key
+# API Key (puedes mover a secrets.toml si deseas ocultarla)
+api_key = "K84668714088957"
 
-def reducir_imagen(bytes_data, max_size_kb=1024):
-    image = Image.open(io.BytesIO(bytes_data))
-    quality = 90
+# Función para comprimir imágenes que superan 1 MB
+def reducir_tamano_imagen(imagen_pil):
     buffer = io.BytesIO()
+    calidad = 95
     while True:
         buffer.seek(0)
-        buffer.truncate()
-        image.save(buffer, format="JPEG", quality=quality)
-        size_kb = buffer.tell() / 1024
-        if size_kb <= max_size_kb or quality <= 20:
+        imagen_pil.save(buffer, format="JPEG", quality=calidad)
+        if buffer.tell() <= 1024 * 1024 or calidad <= 20:
             break
-        quality -= 10
-    return buffer.getvalue()
+        calidad -= 5
+    buffer.seek(0)
+    return buffer
 
-def ocr_space_api(image_bytes, api_key):
-    url_api = "https://api.ocr.space/parse/image"
-    headers = {"apikey": api_key}
-    files = {'file': ('image.jpg', image_bytes)}
-    payload = {'language': 'spa', 'isOverlayRequired': False}
-    response = requests.post(url_api, headers=headers, files=files, data=payload)
+# Enviar imagen a OCR.space
+def enviar_a_ocr(imagen):
+    imagen_pil = Image.open(imagen).convert("RGB")
+    imagen_bytes = reducir_tamano_imagen(imagen_pil)
+
+    response = requests.post(
+        "https://api.ocr.space/parse/image",
+        files={"filename": imagen_bytes},
+        data={"apikey": api_key, "language": "spa"},
+    )
     result = response.json()
     if result.get("IsErroredOnProcessing"):
-        st.error("Error en OCR.space: " + result.get("ErrorMessage", ["Error desconocido"])[0])
-        return None
-    parsed_results = result.get("ParsedResults")
-    if parsed_results:
-        return parsed_results[0].get("ParsedText", "")
-    return ""
+        return None, result.get("ErrorMessage", "Error desconocido")
+    return result["ParsedResults"][0]["ParsedText"], None
 
-def extraer_campos(texto):
-    # Define aquí tus patrones de extracción
-    patrones = {
-        "Empresa": r"(TECPETROL COLOMBIA S\.A\.S)",
-        "NIT": r"NIT\.?\s*([\d\.\-]+)",
-        "Número de guía": r"FACTURA O REMISIÓN NO\s*(\d+)",
-        "Conductor": r"FIRMA DEL CLIENTE\s*[\d\s]*([A-Z\s]+)",
-        "Placas cabezote": r"PLACAS DEL CABEZOTE\s*([A-Z0-9\-]+)",
-        "Placas tanque": r"PLACAS DEL TANQUE\s*([A-Z0-9\-]+)",
-        "Fecha y hora de salida": r"FECHA Y HORA DE SALIDA\s*([\d]+)",
-        "Barriles netos": r"NETO S\s*([\d\.]+)",
-        "B.S.W.": r"B\.S\.W\.\s*([\d\.]+)",
-        # Puedes añadir más campos aquí siguiendo el mismo patrón
+# Función de extracción estructurada
+def extraer_datos(texto):
+    datos = {
+        "Datos Generales": {
+            "Número de Guía": extraer_por_patron(texto, r"Número de Gu[ií]a[:\s]*([0-9]{3,})"),
+            "Número de Factura/Remisión": extraer_por_patron(texto, r"(Factura|Remisión)[^\d]*([0-9]{5,})"),
+            "Lugar y Fecha de Expedición": extraer_por_patron(texto, r"(?i)LUGAR Y FECHA DE EXPEDICIÓN[:\s]*(.*)"),
+            "Planta o Campo Productor": extraer_por_patron(texto, r"PLANTA O CAMPO PRODUCTOR[:\s]*(.*)")
+        },
+        "Datos del Destinatario": {
+            "Despachado a": extraer_por_patron(texto, r"DESPACHADO A[:\s]*(.*)"),
+            "Dirección": extraer_por_patron(texto, r"DIRECCIÓN[:\s]*(.*)"),
+            "Ciudad": extraer_por_patron(texto, r"CIUDAD[:\s]*(.*)"),
+            "Código ONU": extraer_por_patron(texto, r"CÓDIGO[:\s]*([A-Z]{2,4}\s*\d{3,5})")
+        },
+        "Datos del Transporte": {
+            "Conductor": extraer_por_patron(texto, r"NOMBRE DEL CONDUCTOR[:\s]*(.*)"),
+            "Cédula": extraer_por_patron(texto, r"C[EÉ]DULA[:\s]*([0-9]{6,})"),
+            "Empresa Transportadora": extraer_por_patron(texto, r"EMPRESA TRANSPORTADORA[:\s]*(.*)"),
+            "Placa del Cabeza Tractora": extraer_por_patron(texto, r"CABEZOTE[:\s]*([A-Z]{3}\d{3})"),
+            "Placa del Tanque": extraer_por_patron(texto, r"TANQUE[:\s]*([A-Z]{1,3}\d{3,5})"),
+            "Lugar de Origen": extraer_por_patron(texto, r"LUGAR DE ORIGEN[:\s]*(.*)"),
+            "Lugar de Destino": extraer_por_patron(texto, r"LUGAR DE DESTINO[:\s]*(.*)"),
+            "Fecha y Hora de Salida": extraer_por_patron(texto, r"SALIDA[:\s]*(\d{2}/\d{2}/\d{4}.*)"),
+            "Vigencia de la Guía": extraer_por_patron(texto, r"VIGENCIA.*?(\d{1,3})\s*horas", flags=re.IGNORECASE)
+        },
+        "Descripción del Producto": {
+            "Producto": extraer_por_patron(texto, r"DESCRIPCI[ÓO]N DEL PRODUCTO[:\s]*(.*)"),
+            "Sellos": extraer_por_patron(texto, r"SELLO[S]?[:\s]*(\d{4,}-?\d*)"),
+            "API": extraer_por_patron(texto, r"A\.?P\.?I\.?[:\s]*([\d.]+)"),
+            "BSW (%)": extraer_por_patron(texto, r"B\.?S\.?W\.?[:\s]*([\d.]+)%?")
+        },
+        "Volumen Transportado": {
+            "Barriles Brutos": extraer_por_patron(texto, r"BRUTO[S]?[:\s]*([\d.]+)"),
+            "Barriles Netos": extraer_por_patron(texto, r"NETO[S]?[:\s]*([\d.]+)"),
+            "Barriles a 60°F": extraer_por_patron(texto, r"60.?F[:\s]*([\d.]+)")
+        }
     }
-    resultados = {}
-    for campo, patron in patrones.items():
-        match = re.search(patron, texto, re.IGNORECASE)
-        if match:
-            resultados[campo] = match.group(1).strip()
-        else:
-            resultados[campo] = "No encontrado"
-    return resultados
+    return datos
 
-st.title("Extracción de Datos Clave de Guías Petroleras con OCR.space")
+# Utilidad para extraer con regex
+import re
+def extraer_por_patron(texto, patron, flags=0):
+    match = re.search(patron, texto, flags)
+    return match.group(1).strip() if match else ""
 
-uploaded_file = st.file_uploader("Sube una imagen de la guía (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
-
-if uploaded_file:
-    bytes_data_raw = uploaded_file.read()
-    size_kb_raw = len(bytes_data_raw) / 1024
-    st.write(f"Tamaño original de la imagen: {size_kb_raw:.2f} KB")
-
-    if size_kb_raw > 1024:
-        st.info("La imagen es mayor a 1 MB, se reducirá su tamaño automáticamente...")
-        bytes_data = reducir_imagen(bytes_data_raw, max_size_kb=1024)
-        size_kb_new = len(bytes_data) / 1024
-        st.write(f"Tamaño reducido: {size_kb_new:.2f} KB")
-    else:
-        bytes_data = bytes_data_raw
-
-    with st.spinner("Procesando OCR..."):
-        texto = ocr_space_api(bytes_data, api_key)
-
-    if texto:
-        st.subheader("Texto extraído de la imagen:")
-        st.text_area("", texto, height=300)
-
-        campos = extraer_campos(texto)
-
-        st.subheader("Datos extraídos:")
+# Mostrar datos en forma de tablas por sección
+def mostrar_datos_estructurados(datos):
+    for seccion, campos in datos.items():
+        st.markdown(f"### 🟩 {seccion}")
         df = pd.DataFrame(list(campos.items()), columns=["Campo", "Valor"])
         st.table(df)
 
-        # Botón para exportar a Excel
-        excel_data = df.to_excel(index=False)
+# Crear DataFrame para Excel
+def crear_dataframe_para_excel(datos):
+    filas = []
+    for seccion, campos in datos.items():
+        for campo, valor in campos.items():
+            filas.append({"Sección": seccion, "Campo": campo, "Valor": valor})
+    return pd.DataFrame(filas)
+
+# INTERFAZ DE LA APP
+st.set_page_config(page_title="OCR Guías de Petróleo", layout="centered")
+st.title("📄 Extracción de Datos de Guías de Transporte de Crudo")
+
+imagen_subida = st.file_uploader("📤 Sube una imagen o escaneo de la guía", type=["jpg", "jpeg", "png", "pdf"])
+
+if imagen_subida:
+    st.image(imagen_subida, caption="Imagen cargada", use_column_width=True)
+    texto, error = enviar_a_ocr(imagen_subida)
+    if error:
+        st.error(f"❌ Error en OCR.space: {error}")
+    elif texto:
+        datos = extraer_datos(texto)
+        mostrar_datos_estructurados(datos)
+
+        df_excel = crear_dataframe_para_excel(datos)
+        buffer_excel = io.BytesIO()
+        df_excel.to_excel(buffer_excel, index=False, sheet_name="Datos OCR", engine="openpyxl")
+        buffer_excel.seek(0)
+
         st.download_button(
-            label="Descargar datos en Excel",
-            data=df.to_excel(index=False).encode('utf-8'),
-            file_name="datos_guia_petrolera.xlsx",
+            label="⬇️ Descargar Excel",
+            data=buffer_excel,
+            file_name="datos_guia_ocr.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
-        st.error("No se pudo extraer texto de la imagen.")
+        st.warning("⚠️ No se pudo extraer texto de la imagen.")
+
