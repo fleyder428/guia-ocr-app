@@ -5,10 +5,10 @@ import io
 import pandas as pd
 import re
 
-st.set_page_config(page_title="Extractor de Guías Mejorado", layout="centered")
-st.title("🛢️ Extractor Mejorado de Guías de Transporte de Crudo")
+st.set_page_config(page_title="Extractor de Guías de Crudo Adaptado", layout="centered")
+st.title("🛢️ Extractor Adaptado de Guías con OCR Flexible")
 
-api_key = "K84668714088957"  # Cambia tu API Key aquí
+api_key = "K84668714088957"  # Pon tu API Key aquí
 
 def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
     img = Image.open(image_file)
@@ -39,42 +39,57 @@ def extract_text_from_image(image):
         return ""
     return result_json["ParsedResults"][0]["ParsedText"]
 
-def find_value_after_keyword(text, keyword, multiline=False):
-    # Busca la palabra clave y extrae lo que está después de ":" en la misma línea o en la siguiente si multiline
-    pattern = rf"{keyword}[:\s]*([\w\s\-\./,°]+)"
-    match = re.search(pattern, text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    elif multiline:
-        # Buscar línea siguiente
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if keyword.lower() in line.lower() and i+1 < len(lines):
-                return lines[i+1].strip()
+def search_flexible(text, keywords, multiline=False):
+    """
+    Busca palabras clave similares en el texto para extraer el valor.
+    keywords: lista de palabras clave posibles (strings)
+    multiline: si True busca en línea siguiente si no encuentra en la misma línea.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        for kw in keywords:
+            if kw.lower() in line.lower():
+                # Intenta extraer después de ":" en la misma línea
+                parts = re.split(r"[:\-]", line, maxsplit=1)
+                if len(parts) > 1 and parts[1].strip():
+                    return parts[1].strip()
+                # Si no hay ":" o nada después, intenta línea siguiente si multiline=True
+                if multiline and i + 1 < len(lines):
+                    return lines[i + 1].strip()
     return ""
 
-def extract_custom_fields(text):
-    # Aquí se ajustan las palabras clave a buscar según el texto de la guía real.
-    return [
-        find_value_after_keyword(text, "fecha y hora de salida", True),
-        find_value_after_keyword(text, "placa del cabezote", True) or find_value_after_keyword(text, "placas del cabezote", True),
-        find_value_after_keyword(text, "placas del tanque", True),
-        find_value_after_keyword(text, "número de guía") or find_value_after_keyword(text, "guía") or find_value_after_keyword(text, "numero de guía"),
-        find_value_after_keyword(text, "empresa transportadora", True),
-        find_value_after_keyword(text, "cédula", True),
-        find_value_after_keyword(text, "nombre del conductor", True) or find_value_after_keyword(text, "conductor", True),
-        "",  # Casilla en blanco
-        find_value_after_keyword(text, "lugar de origen", True) or find_value_after_keyword(text, "origen", True),
-        find_value_after_keyword(text, "lugar de destino", True) or find_value_after_keyword(text, "destino", True),
-        find_value_after_keyword(text, "barriles brutos", True) or find_value_after_keyword(text, "barriles", True),
-        find_value_after_keyword(text, "barriles netos", True),
-        find_value_after_keyword(text, "barriles a 60", True),
-        find_value_after_keyword(text, "api", True),
-        find_value_after_keyword(text, "bsw", True),
-        find_value_after_keyword(text, "horas de vigencia", True) or find_value_after_keyword(text, "vigencia", True),
-        "", "", "", "", "", "",  # Seis casillas vacías
-        find_value_after_keyword(text, "sellos", True),
+def extract_fields(text):
+    # Lista de posibles keywords para cada campo (más flexibles)
+    fields_keywords = [
+        ["fecha y hora de salida", "fecha salida", "fecha y hora", "salida"],  # Fecha y hora de salida
+        ["placa del cabezote", "placas del cabezote", "placa cabeza tractora", "placa cabeza", "placa tractora"],  # Placa cabeza tractora
+        ["placas del tanque", "placa tanque"],  # Placa tanque
+        ["número de guía", "numero de guia", "guía", "guia", "número guia"],  # Número de guía
+        ["empresa transportadora", "transportadora"],  # Empresa transportadora
+        ["cédula", "cedula"],  # Cédula
+        ["nombre del conductor", "conductor"],  # Conductor
+        [],  # Casilla en blanco
+        ["lugar de origen", "origen"],  # Lugar de origen
+        ["lugar de destino", "destino"],  # Lugar de destino
+        ["barriles brutos", "barriles", "volumen en barriles", "volumen en sarrles"],  # Barriles brutos (flexible)
+        ["barriles netos", "netos"],  # Barriles netos
+        ["barriles a 60", "barriles a 60°f"],  # Barriles a 60°F
+        ["api"],  # API
+        ["bsw", "bsw (%)"],  # BSW
+        ["horas de vigencia", "vigencia"],  # Vigencia de guía
+        [], [], [], [], [], [],  # Seis casillas en blanco
+        ["sellos", "sello"],  # Sellos
     ]
+
+    extracted = []
+    for kw_list in fields_keywords:
+        if len(kw_list) == 0:
+            # Casilla en blanco
+            extracted.append("")
+        else:
+            val = search_flexible(text, kw_list, multiline=True)
+            extracted.append(val)
+    return extracted
 
 uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
 
@@ -83,15 +98,15 @@ if uploaded_file:
     image_compressed = compress_and_resize_image(uploaded_file)
 
     with st.spinner("🧠 Analizando imagen con OCR..."):
-        text_result = extract_text_from_image(image_compressed)
+        texto_extraido = extract_text_from_image(image_compressed)
 
-    if text_result:
-        st.subheader("📝 Texto extraído de la imagen (revisar para validar):")
-        st.text_area("Texto OCR", text_result, height=300)
+    if texto_extraido:
+        st.subheader("📝 Texto extraído (verifica para ajustes):")
+        st.text_area("Texto OCR", texto_extraido, height=300)
 
-        extracted_fields = extract_custom_fields(text_result)
+        datos_extraidos = extract_fields(texto_extraido)
 
-        field_names = [
+        nombres_campos = [
             "Fecha y Hora de Salida", "Placa Cabeza Tractora", "Placa del Tanque", "Número de Guía",
             "Empresa Transportadora", "Cédula", "Conductor", "Casilla en blanco",
             "Lugar de Origen", "Lugar de Destino", "Barriles Brutos", "Barriles Netos", "Barriles a 60°F",
@@ -100,13 +115,14 @@ if uploaded_file:
             "Sellos"
         ]
 
-        df = pd.DataFrame([extracted_fields], columns=field_names)
-        st.success("✅ Datos extraídos")
+        df = pd.DataFrame([datos_extraidos], columns=nombres_campos)
+        st.success("✅ Datos extraídos:")
         st.dataframe(df, use_container_width=True)
 
-        excel_buffer = io.BytesIO()
-        df.to_excel(excel_buffer, index=False)
-        excel_buffer.seek(0)
-        st.download_button("📥 Descargar Excel", data=excel_buffer, file_name="datos_extraidos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        buffer_excel = io.BytesIO()
+        df.to_excel(buffer_excel, index=False)
+        buffer_excel.seek(0)
+        st.download_button("📥 Descargar Excel", data=buffer_excel, file_name="datos_guia_extraidos.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.error("No se pudo extraer texto de la imagen.")
