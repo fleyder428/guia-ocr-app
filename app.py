@@ -1,137 +1,90 @@
 import streamlit as st
 import requests
-import re
 import pandas as pd
+import re
+from collections import OrderedDict
+from io import BytesIO
 
-OCR_SPACE_API_KEY = "TU_API_KEY_AQUI"  # Cambia aquí tu API Key
+st.set_page_config(page_title="Extractor OCR Guías", layout="wide")
+st.title("🧾 OCR + Extracción Automática de Guías de Transporte")
 
-def ocr_space_file(file):
-    """Enviar imagen a OCR.space y devolver texto extraído."""
-    payload = {
-        'apikey': OCR_SPACE_API_KEY,
-        'language': 'spa',
-        'isOverlayRequired': False,
-    }
-    files = {'file': (file.name, file, file.type)}
-    response = requests.post('https://api.ocr.space/parse/image',
-                             data=payload,
-                             files=files)
-    try:
-        result = response.json()
-    except Exception as e:
-        raise Exception("No se pudo interpretar la respuesta de OCR.space como JSON.") from e
-    
-    if not isinstance(result, dict):
-        raise Exception("Respuesta inesperada de OCR.space, no es un objeto JSON.")
+OCR_API_KEY = "K84668714088957"  # tu clave API personal de OCR.space
 
-    if result.get("IsErroredOnProcessing", True):
-        errors = result.get("ErrorMessage", ["Error desconocido en OCR.space"])
-        raise Exception("Error en OCR.space: " + "; ".join(errors))
-    
-    parsed_results = result.get("ParsedResults")
-    if not parsed_results or len(parsed_results) == 0:
-        raise Exception("No se encontraron resultados parseados en OCR.space.")
-    
-    return parsed_results[0].get("ParsedText", "")
+def llamar_ocr_space(image_bytes):
+    url = 'https://api.ocr.space/parse/image'
+    response = requests.post(
+        url,
+        files={'filename': image_bytes},
+        data={'apikey': OCR_API_KEY, 'language': 'spa', 'isOverlayRequired': False},
+    )
+    result = response.json()
+    texto = result['ParsedResults'][0]['ParsedText'] if result.get("ParsedResults") else ''
+    return texto
 
-def normalize_text(text):
-    replacements = {
-        r'[ÁÀÂÄ]': 'A',
-        r'[ÉÈÊË]': 'E',
-        r'[ÍÌÎÏ]': 'I',
-        r'[ÓÒÔÖ]': 'O',
-        r'[ÚÙÛÜ]': 'U',
-        r'Ñ': 'N',
-        r'[^A-Z0-9\s\.,:/\-]': ' ',  # Letras, números y signos comunes
-    }
-    text = text.upper()
-    for wrong, right in replacements.items():
-        text = re.sub(wrong, right, text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+def extraer_datos_guia(texto):
+    datos = OrderedDict()
 
-def extract_section(text, start_marker, end_marker=None):
-    if end_marker:
-        pattern = re.escape(start_marker) + r'(.*?)' + re.escape(end_marker)
-    else:
-        pattern = re.escape(start_marker) + r'(.*)'
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).strip() if match else ''
+    # ========== DATOS GENERALES ==========
+    datos['Número de Guía'] = re.search(r'Número de Guía\s+(\d+)', texto).group(1) if re.search(r'Número de Guía\s+(\d+)', texto) else ''
+    datos['Número de Factura/Remisión'] = re.search(r'Número de Factura/Remisión\s+(\d+)', texto).group(1) if re.search(r'Número de Factura/Remisión\s+(\d+)', texto) else ''
+    datos['Lugar y Fecha de Expedición'] = re.search(r'Lugar y Fecha de Expedición\s+(.+)', texto).group(1).strip() if re.search(r'Lugar y Fecha de Expedición\s+(.+)', texto) else ''
+    datos['Planta o Campo Productor'] = re.search(r'Planta o Campo Productor\s+(.+)', texto).group(1).strip() if re.search(r'Planta o Campo Productor\s+(.+)', texto) else ''
 
-def extract_field(pattern, text):
-    m = re.search(pattern, text, re.IGNORECASE)
-    return m.group(1).strip() if m else ''
+    # ========== DESTINATARIO ==========
+    datos['Despachado a'] = re.search(r'Despachado a\s+(.+)', texto).group(1).strip() if re.search(r'Despachado a\s+(.+)', texto) else ''
+    datos['Dirección'] = re.search(r'Dirección\s+(.+)', texto).group(1).strip() if re.search(r'Dirección\s+(.+)', texto) else ''
+    datos['Ciudad'] = re.search(r'Ciudad\s+(.+)', texto).group(1).strip() if re.search(r'Ciudad\s+(.+)', texto) else ''
+    datos['Código ONU'] = re.search(r'Código ONU\s+(.+)', texto).group(1).strip() if re.search(r'Código ONU\s+(.+)', texto) else ''
 
-def parse_ocr_text(text):
-    text = normalize_text(text)
+    # ========== TRANSPORTE ==========
+    datos['Conductor'] = re.search(r'Conductor\s+(.+)', texto).group(1).strip() if re.search(r'Conductor\s+(.+)', texto) else ''
+    datos['Cédula'] = re.search(r'Cédula\s+(\d+)', texto).group(1) if re.search(r'Cédula\s+(\d+)', texto) else ''
+    datos['Empresa Transportadora'] = re.search(r'Empresa Transportadora\s+(.+)', texto).group(1).strip() if re.search(r'Empresa Transportadora\s+(.+)', texto) else ''
+    datos['Placa del Cabeza Tractora'] = re.search(r'Placa del Cabeza Tractora\s+(\w+)', texto).group(1) if re.search(r'Placa del Cabeza Tractora\s+(\w+)', texto) else ''
+    datos['Placa del Tanque'] = re.search(r'Placa del Tanque\s+(\w+)', texto).group(1) if re.search(r'Placa del Tanque\s+(\w+)', texto) else ''
+    datos['Lugar de Origen'] = re.search(r'Lugar de Origen\s+(.+)', texto).group(1).strip() if re.search(r'Lugar de Origen\s+(.+)', texto) else ''
+    datos['Lugar de Destino'] = re.search(r'Lugar de Destino\s+(.+)', texto).group(1).strip() if re.search(r'Lugar de Destino\s+(.+)', texto) else ''
+    datos['Fecha y Hora de Salida'] = re.search(r'Fecha y Hora de Salida\s+(.+)', texto).group(1).strip() if re.search(r'Fecha y Hora de Salida\s+(.+)', texto) else ''
+    datos['Vigencia de la Guía'] = re.search(r'Vigencia de la Guía\s+(.+)', texto).group(1).strip() if re.search(r'Vigencia de la Guía\s+(.+)', texto) else ''
 
-    datos_generales = extract_section(text, "NUMERO DE GUIA", "DATOS DEL DESTINATARIO")
-    datos_destinatario = extract_section(text, "DATOS DEL DESTINATARIO", "DATOS DEL TRANSPORTE")
-    datos_transporte = extract_section(text, "DATOS DEL TRANSPORTE", "DESCRIPCION DEL PRODUCTO")
-    descripcion_producto = extract_section(text, "DESCRIPCION DEL PRODUCTO", "VOLUMEN TRANSPORTADO")
-    volumen_transportado = extract_section(text, "VOLUMEN TRANSPORTADO")
+    # ========== PRODUCTO ==========
+    datos['Producto'] = re.search(r'Producto\s+(.+)', texto).group(1).strip() if re.search(r'Producto\s+(.+)', texto) else ''
+    datos['Propietario'] = re.search(r'Propietario\s+(.+)', texto).group(1).strip() if re.search(r'Propietario\s+(.+)', texto) else ''
+    datos['Comercializadora'] = re.search(r'Comercializadora\s+(.+)', texto).group(1).strip() if re.search(r'Comercializadora\s+(.+)', texto) else ''
+    datos['Sellos'] = re.search(r'Sellos\s+([0-9\-]+)', texto).group(1).strip() if re.search(r'Sellos\s+([0-9\-]+)', texto) else ''
+    datos['Temperatura (°F)'] = re.search(r'Temperatura \(°F\)\s+([\d\.]+)', texto).group(1) if re.search(r'Temperatura \(°F\)\s+([\d\.]+)', texto) else ''
+    datos['API'] = re.search(r'API\s+([\d\.]+)', texto).group(1) if re.search(r'API\s+([\d\.]+)', texto) else ''
+    datos['Salinidad (%)'] = re.search(r'Salinidad \(%\)\s+([\d\.]+)', texto).group(1) if re.search(r'Salinidad \(%\)\s+([\d\.]+)', texto) else ''
+    datos['PVC'] = re.search(r'PVC\s+([\d\.]+)', texto).group(1) if re.search(r'PVC\s+([\d\.]+)', texto) else ''
+    datos['BSW (%)'] = re.search(r'BSW \(%\)\s+([\d\.]+)', texto).group(1) if re.search(r'BSW \(%\)\s+([\d\.]+)', texto) else ''
+    datos['Azufre (S%)'] = re.search(r'Azufre \(S%\)\s+([\d\.]+)', texto).group(1) if re.search(r'Azufre \(S%\)\s+([\d\.]+)', texto) else ''
 
-    datos = {
-        "Datos Generales": {
-            "Número de Guía": extract_field(r'NUMERO DE GUIA\s*([0-9]+)', datos_generales),
-            "Número de Factura/Remisión": extract_field(r'NUMERO DE FACTURA/REMISION\s*([0-9]+)', datos_generales),
-            "Lugar y Fecha de Expedición": extract_field(r'LUGAR Y FECHA DE EXPEDICION\s*([\w\s\-,:/]+)', datos_generales),
-            "Planta o Campo Productor": extract_field(r'PLANTA O CAMPO PRODUCTOR\s*([\w\s]+)', datos_generales)
-        },
-        "Datos del Destinatario": {
-            "Despachado a": extract_field(r'DESPACHADO A\s*([\w\s\.,]+)', datos_destinatario),
-            "Dirección": extract_field(r'DIRECCION\s*([\w\s\.,\-#]+)', datos_destinatario),
-            "Ciudad": extract_field(r'CIUDAD\s*([\w\s\-]+)', datos_destinatario),
-            "Código ONU": extract_field(r'CODIGO ONU\s*([A-Z0-9]+)', datos_destinatario)
-        },
-        "Datos del Transporte": {
-            "Conductor": extract_field(r'CONDUCTOR\s*([\w\s]+)', datos_transporte),
-            "Cédula": extract_field(r'CEDULA\s*([0-9]+)', datos_transporte),
-            "Empresa Transportadora": extract_field(r'EMPRESA TRANSPORTADORA\s*([\w\s]+)', datos_transporte),
-            "Placa del Cabeza Tractora": extract_field(r'PLACA DEL CABEZA TRACTORA\s*([A-Z0-9\-]+)', datos_transporte),
-            "Placa del Tanque": extract_field(r'PLACA DEL TANQUE\s*([A-Z0-9\-]+)', datos_transporte),
-            "Lugar de Origen": extract_field(r'LUGAR DE ORIGEN\s*([\w\s\-]+)', datos_transporte),
-            "Lugar de Destino": extract_field(r'LUGAR DE DESTINO\s*([\w\s\-]+)', datos_transporte),
-            "Fecha y Hora de Salida": extract_field(r'FECHA Y HORA DE SALIDA\s*([\w\s/:\-APM]+)', datos_transporte),
-            "Vigencia de la Guía": extract_field(r'VIGENCIA DE LA GUIA\s*([\w\s]+)', datos_transporte)
-        },
-        "Descripción del Producto": {
-            "Producto": extract_field(r'PRODUCTO\s*([\w\s]+)', descripcion_producto),
-            "Propietario": extract_field(r'PROPIETARIO\s*([\w\s]+)', descripcion_producto),
-            "Comercializadora": extract_field(r'COMERCIALIZADORA\s*([\w\s]+)', descripcion_producto),
-            "Sellos": extract_field(r'SELLOS\s*([\w\-]+)', descripcion_producto),
-            "Temperatura (°F)": extract_field(r'TEMPERATURA\s*[\(°F\)]*\s*([\d\.]+[°F]*)', descripcion_producto),
-            "API": extract_field(r'API\s*([\d\.]+)', descripcion_producto),
-            "Salinidad (%)": extract_field(r'SALINIDAD\s*[%]*\s*([\d\.]+)', descripcion_producto),
-            "PVC": extract_field(r'PVC\s*([\d\.]+)', descripcion_producto),
-            "BSW (%)": extract_field(r'BSW\s*[%]*\s*([\d\.]+)', descripcion_producto),
-            "Azufre (S%)": extract_field(r'AZUFRE\s*[(S%)]*\s*([\d\.]+)', descripcion_producto)
-        },
-        "Volumen Transportado": {
-            "Barriles Brutos": extract_field(r'BARRILES BRUTOS\s*([\d\.,]+)', volumen_transportado),
-            "Barriles a 60°F": extract_field(r'BARRILES A 60[F]*\s*([\d\.,]+)', volumen_transportado),
-            "Barriles Netos": extract_field(r'BARRILES NETOS\s*([\d\.,]+)', volumen_transportado)
-        }
-    }
+    # ========== VOLUMEN ==========
+    datos['Barriles Brutos'] = re.search(r'Barriles Brutos\s+([\d\.]+)', texto).group(1) if re.search(r'Barriles Brutos\s+([\d\.]+)', texto) else ''
+    datos['Barriles a 60°F'] = re.search(r'Barriles a 60°F\s+([\d\.]+)', texto).group(1) if re.search(r'Barriles a 60°F\s+([\d\.]+)', texto) else ''
+    datos['Barriles Netos'] = re.search(r'Barriles Netos\s+([\d\.]+)', texto).group(1) if re.search(r'Barriles Netos\s+([\d\.]+)', texto) else ''
+
     return datos
 
-def app():
-    st.title("App OCR para Guías de Transporte")
+uploaded_image = st.file_uploader("📷 Sube una imagen de guía escaneada:", type=["jpg", "jpeg", "png", "pdf"])
 
-    uploaded_file = st.file_uploader("Sube una imagen de la guía (jpg, png, jpeg)", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        with st.spinner("Procesando imagen con OCR.space..."):
-            try:
-                texto_ocr = ocr_space_file(uploaded_file)
-                st.text_area("Texto OCR Extraído", texto_ocr, height=200)
-                
-                datos = parse_ocr_text(texto_ocr)
-                for seccion, campos in datos.items():
-                    st.markdown(f"### 🟩 {seccion}")
-                    df = pd.DataFrame(campos.items(), columns=["Campo", "Valor"])
-                    st.table(df)
-            except Exception as e:
-                st.error(f"Error: {e}")
+if uploaded_image and st.button("🔍 Analizar y Extraer"):
+    st.info("⏳ Ejecutando OCR, por favor espera...")
+    texto_ocr = llamar_ocr_space(uploaded_image)
 
-if __name__ == "__main__":
-    app()
+    if texto_ocr.strip() == "":
+        st.error("No se pudo leer texto OCR. Verifica que la imagen esté clara.")
+    else:
+        st.subheader("📋 Texto OCR Detectado:")
+        st.text_area("Resultado OCR:", texto_ocr, height=200)
+
+        datos = extraer_datos_guia(texto_ocr)
+        st.subheader("✅ Datos extraídos:")
+        st.json(datos)
+
+        df = pd.DataFrame([datos])
+        st.dataframe(df)
+
+        excel = BytesIO()
+        df.to_excel(excel, index=False, engine="openpyxl")
+        st.download_button("⬇️ Descargar Excel", data=excel.getvalue(), file_name="guia_extraida.xlsx")
