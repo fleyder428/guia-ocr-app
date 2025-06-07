@@ -4,27 +4,32 @@ import pandas as pd
 from io import BytesIO
 from PIL import Image
 
-# 1. Configuración de la app
-st.set_page_config(page_title="Extracción de Guías", layout="centered")
-st.title("📄 Extracción Inteligente de Guías - OCR")
+# ===== CONFIGURACIÓN GENERAL =====
+st.set_page_config(page_title="🧾 Guías OCR Personalizadas")
+st.title("🧾 Cargar Guía y Extraer Datos")
 
-# 2. Subida de imagen
-uploaded_file = st.file_uploader("📷 Sube una imagen de la guía (.jpg o .png)", type=["jpg", "jpeg", "png"])
+# ===== DATOS DE USUARIO =====
+api_key = st.secrets["ocr_space_api_key"]  # Usa secrets.toml o reemplaza directamente aquí
+url_api = 'https://api.ocr.space/parse/image'
 
-# 3. API Key de OCR.space (puedes ocultarla con secrets en producción)
-API_KEY = "TU_API_KEY_AQUÍ"
+# ===== SUBIR IMAGEN =====
+imagen = st.file_uploader("📤 Sube una imagen JPG o PNG de la guía", type=["jpg", "jpeg", "png"])
 
-# 4. Función para enviar imagen a OCR.space
-def ocr_space_image(image_file):
-    url_api = "https://api.ocr.space/parse/image"
-    result = requests.post(
+# ===== FUNCIONES =====
+def enviar_ocr_space(imagen_bytes):
+    response = requests.post(
         url_api,
-        files={"filename": image_file},
-        data={"apikey": API_KEY, "language": "spa", "isOverlayRequired": False}
+        files={"filename": imagen_bytes},
+        data={
+            "apikey": api_key,
+            "language": "spa",
+            "isTable": "false",
+            "OCREngine": "2"
+        }
     )
-    return result.json()
+    result = response.json()
+    return result['ParsedResults'][0]['ParsedText'] if 'ParsedResults' in result else ""
 
-# 5. Función para extraer campos específicos del texto
 def extraer_campos(texto):
     campos = {
         "Fecha y hora de salida": "",
@@ -52,66 +57,67 @@ def extraer_campos(texto):
         "Sellos": ""
     }
 
-    # Extracciones simples basadas en búsqueda de texto
-    lines = texto.splitlines()
-    for line in lines:
-        if "19:" in line or "Hora de salida" in line:
-            campos["Fecha y hora de salida"] = line.strip()
-        if "GWU" in line:
-            campos["Placa cabeza tractora"] = line.strip()
-        if "R78" in line:
-            campos["Placa del tanque"] = line.strip()
-        if "Guía" in line or "No" in line:
-            campos["Número de guía"] = line.strip().split()[-1]
-        if "VIGIA" in line:
-            campos["Empresa transportadora"] = "VIGIA"
-        if "7437" in line:
-            campos["Cédula"] = "74379067"
-        if "CAMILO" in line:
-            campos["Conductor"] = "CAMILO GARZON MONTAÑEZ"
-        if "CPF" in line:
+    texto = texto.replace("\n", " ").replace(":", " ").replace(",", ".")
+    palabras = texto.split()
+
+    # Ejemplos de extracción robusta (puedes mejorarlo por regex luego)
+    for i, palabra in enumerate(palabras):
+        if palabra.startswith("GWU"):
+            campos["Placa cabeza tractora"] = palabra
+        elif palabra.startswith("R7"):
+            campos["Placa del tanque"] = palabra
+        elif palabra.lower().startswith("vigia"):
+            campos["Empresa transportadora"] = palabra
+        elif "CAMILO" in palabra.upper():
+            campos["Conductor"] = " ".join(palabras[i:i+3])
+        elif palabra.lower() == "pendare":
             campos["Lugar de origen"] = "CPF PENDARE"
-        if "GUADUAS" in line:
+        elif "guaduas" in palabra.lower():
             campos["Lugar de destino"] = "ESTACIÓN GUADUAS"
-        if "BRUTOS" in line:
-            campos["Barriles brutos"] = "230,61"
-        if "NETOS" in line:
-            campos["Barriles netos"] = "217,73"
-        if "60°F" in line:
-            campos["Barriles a 60°F"] = "218,69"
-        if "API" in line:
-            campos["API"] = "14,6"
-        if "BSW" in line:
-            campos["BSW (%)"] = "0,438%"
-        if "72 HORAS" in line:
-            campos["Vigencia de guía"] = "72 HORAS"
-        if "208935" in line:
-            campos["Sellos"] = "208935-208936-208937-208938"
+        elif palabra.lower() == "brutos":
+            campos["Barriles brutos"] = palabras[i+1]
+        elif palabra == "netos":
+            campos["Barriles netos"] = palabras[i+1]
+        elif palabra == "60°F" or palabra == "60f":
+            campos["Barriles a 60°F"] = palabras[i-1]
+        elif palabra.lower() == "api":
+            campos["API"] = palabras[i+1]
+        elif palabra.lower() == "bsw":
+            campos["BSW (%)"] = palabras[i+1]
+        elif palabra == "HORAS":
+            campos["Vigencia de guía"] = palabras[i-1] + " HORAS"
+        elif palabra.isdigit() and len(palabra) == 7:
+            campos["Número de guía"] = palabra
+        elif len(palabra) == 8 and palabra.isdigit():
+            campos["Cédula"] = palabra
+        elif palabra.lower().startswith("2089"):
+            campos["Sellos"] = palabra
 
     return campos
 
-# 6. Procesamiento
-if uploaded_file:
-    st.image(uploaded_file, caption="Imagen cargada", use_column_width=True)
-    with st.spinner("Procesando imagen..."):
-        ocr_result = ocr_space_image(uploaded_file)
-        if ocr_result.get("IsErroredOnProcessing"):
-            st.error("❌ Error al procesar la imagen.")
-        else:
-            texto_extraido = ocr_result["ParsedResults"][0]["ParsedText"]
-            campos = extraer_campos(texto_extraido)
+# ===== PROCESAR =====
+if imagen:
+    st.image(imagen, caption="Guía cargada", use_column_width=True)
 
-            # Mostrar tabla de resultados
-            st.subheader("✅ Datos extraídos:")
-            df = pd.DataFrame([campos])
-            st.dataframe(df)
+    # Convertir imagen a bytes
+    imagen_bytes = imagen.read()
 
-            # Botón para exportar
-            output = BytesIO()
-            df.to_excel(output, index=False, engine="openpyxl")
-            st.download_button(
-                label="📥 Descargar Excel",
-                data=output.getvalue(),
-                file_name="datos_extraidos.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    with st.spinner("🧠 Aplicando OCR..."):
+        texto_ocr = enviar_ocr_space(imagen_bytes)
+
+    if texto_ocr:
+        campos = extraer_campos(texto_ocr)
+        df = pd.DataFrame([campos])
+        st.success("✅ Extracción completa")
+        st.dataframe(df)
+
+        output = BytesIO()
+        df.to_excel(output, index=False, engine="openpyxl")
+        st.download_button(
+            label="📥 Descargar Excel",
+            data=output.getvalue(),
+            file_name="guia_extraida.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.error("❌ No se pudo procesar el OCR. Verifica la imagen o tu API key.")
