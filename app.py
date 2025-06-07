@@ -5,10 +5,10 @@ import io
 import pandas as pd
 import re
 
-st.set_page_config(page_title="Extractor de Guías", layout="centered")
-st.title("🛢️ Extractor Inteligente de Guías de Transporte de Crudo")
+st.set_page_config(page_title="Extractor de Guías Mejorado", layout="centered")
+st.title("🛢️ Extractor Mejorado de Guías de Transporte de Crudo")
 
-api_key = "K84668714088957"  # Cambia aquí tu API key si quieres
+api_key = "K84668714088957"  # Cambia tu API Key aquí
 
 def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
     img = Image.open(image_file)
@@ -22,7 +22,6 @@ def compress_and_resize_image(image_file, max_size=(2000, 2000), quality=70):
 def extract_text_from_image(image):
     url_api = "https://api.ocr.space/parse/image"
     files = {
-        # El nombre 'image.jpg' y el mime type 'image/jpeg' son claves para que OCR.space detecte el tipo
         "filename": ("image.jpg", image, "image/jpeg")
     }
     result = requests.post(
@@ -40,30 +39,41 @@ def extract_text_from_image(image):
         return ""
     return result_json["ParsedResults"][0]["ParsedText"]
 
-def extract_custom_fields(text):
-    def find(pattern, text, default=""):
-        match = re.search(pattern, text, re.IGNORECASE)
-        return match.group(1).strip() if match else default
+def find_value_after_keyword(text, keyword, multiline=False):
+    # Busca la palabra clave y extrae lo que está después de ":" en la misma línea o en la siguiente si multiline
+    pattern = rf"{keyword}[:\s]*([\w\s\-\./,°]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    elif multiline:
+        # Buscar línea siguiente
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if keyword.lower() in line.lower() and i+1 < len(lines):
+                return lines[i+1].strip()
+    return ""
 
+def extract_custom_fields(text):
+    # Aquí se ajustan las palabras clave a buscar según el texto de la guía real.
     return [
-        find(r"fecha.+salida[:\s]*([\d/:\sAMP]+)", text),
-        find(r"placa(?:s)?(?: del)?(?: cabezote| cabeza)?[:\s]*([A-Z0-9\-]+)", text),
-        find(r"placa(?:s)?(?: del)? tanque[:\s]*([A-Z0-9\-]+)", text),
-        find(r"gu[ií]a[:\s#]*([0-9]{3,})", text),
-        find(r"empresa transportadora[:\s]*([\w\s]+)", text),
-        find(r"c[eé]dula[:\s]*([0-9]{6,})", text),
-        find(r"conductor[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
-        "",
-        find(r"origen[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
-        find(r"destino[:\s]*([A-ZÑÁÉÍÓÚ\s]+)", text),
-        find(r"barriles brutos[:\s]*([0-9.]+)", text),
-        find(r"barriles netos[:\s]*([0-9.]+)", text),
-        find(r"barriles.*60°[Ff][:\s]*([0-9.]+)", text),
-        find(r"\bapi[:\s]*([0-9.]+)", text),
-        find(r"bsw[:\s%]*([0-9.]+)", text),
-        find(r"vigencia[:\s]*([0-9]+)", text),
-        "", "", "", "", "", "",
-        find(r"sellos?[:\s]*([\d\- ]{5,})", text)
+        find_value_after_keyword(text, "fecha y hora de salida", True),
+        find_value_after_keyword(text, "placa del cabezote", True) or find_value_after_keyword(text, "placas del cabezote", True),
+        find_value_after_keyword(text, "placas del tanque", True),
+        find_value_after_keyword(text, "número de guía") or find_value_after_keyword(text, "guía") or find_value_after_keyword(text, "numero de guía"),
+        find_value_after_keyword(text, "empresa transportadora", True),
+        find_value_after_keyword(text, "cédula", True),
+        find_value_after_keyword(text, "nombre del conductor", True) or find_value_after_keyword(text, "conductor", True),
+        "",  # Casilla en blanco
+        find_value_after_keyword(text, "lugar de origen", True) or find_value_after_keyword(text, "origen", True),
+        find_value_after_keyword(text, "lugar de destino", True) or find_value_after_keyword(text, "destino", True),
+        find_value_after_keyword(text, "barriles brutos", True) or find_value_after_keyword(text, "barriles", True),
+        find_value_after_keyword(text, "barriles netos", True),
+        find_value_after_keyword(text, "barriles a 60", True),
+        find_value_after_keyword(text, "api", True),
+        find_value_after_keyword(text, "bsw", True),
+        find_value_after_keyword(text, "horas de vigencia", True) or find_value_after_keyword(text, "vigencia", True),
+        "", "", "", "", "", "",  # Seis casillas vacías
+        find_value_after_keyword(text, "sellos", True),
     ]
 
 uploaded_file = st.file_uploader("📤 Sube una imagen de la guía", type=["jpg", "jpeg", "png"])
@@ -76,6 +86,9 @@ if uploaded_file:
         text_result = extract_text_from_image(image_compressed)
 
     if text_result:
+        st.subheader("📝 Texto extraído de la imagen (revisar para validar):")
+        st.text_area("Texto OCR", text_result, height=300)
+
         extracted_fields = extract_custom_fields(text_result)
 
         field_names = [
@@ -88,10 +101,12 @@ if uploaded_file:
         ]
 
         df = pd.DataFrame([extracted_fields], columns=field_names)
-        st.success("✅ Datos extraídos exitosamente")
+        st.success("✅ Datos extraídos")
         st.dataframe(df, use_container_width=True)
 
         excel_buffer = io.BytesIO()
         df.to_excel(excel_buffer, index=False)
         excel_buffer.seek(0)
         st.download_button("📥 Descargar Excel", data=excel_buffer, file_name="datos_extraidos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    else:
+        st.error("No se pudo extraer texto de la imagen.")
